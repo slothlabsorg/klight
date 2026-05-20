@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: store-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: store-api
+  template:
+    metadata:
+      labels:
+        app: store-api
+    spec:
+      initContainers:
+      - name: sentinel
+        image: klight-sentinel:latest
+        imagePullPolicy: Never
+        env:
+        - name: STARTUP_DEPENDENCIES
+          value: "postgres:5432 kafka:9092 inventory-api:8081/health"
+        - name: SENTINEL_TIMEOUT
+          value: "180"
+      containers:
+      - name: store-api
+        image: store-api:local
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: klight-global-config
+        - configMapRef:
+            name: store-api-config
+        - secretRef:
+            name: klight-global-secrets
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5

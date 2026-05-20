@@ -1,0 +1,174 @@
+# klight-catalog.yaml
+# Infrastructure catalog for klight. This file lives in the project root and can be versioned.
+# klight also checks ~/.klight/catalog.yaml for personal/team additions.
+#
+# To add a custom entry (e.g. your company's internal Redis cluster, an AI model, etc.):
+#   1. Copy any entry below and change the values
+#   2. Add it under a new key
+#   3. Reference it in your klight.yaml: needs: [my-custom-entry]
+#
+# Each entry generates:
+#   - A StatefulSet in the namespace (from the manifest directory)
+#   - ConfigMap entries (from "provides") injected into all services that declare this need
+#
+# "mode: external" skips the StatefulSet and just injects the env vars pointing to real infra.
+
+version: "1"
+
+infra:
+
+  # ── Databases ──────────────────────────────────────────────────────────────
+
+  postgres:
+    description: PostgreSQL 16 — relational database
+    image: postgres:16-alpine
+    port: 5432
+    manifest: infrastructure/postgres/base
+    provides:
+      GLOBAL_POSTGRES_HOST: postgres
+      GLOBAL_POSTGRES_PORT: "5432"
+
+  mysql:
+    description: MySQL 8 — relational database
+    image: mysql:8.0
+    port: 3306
+    manifest: infrastructure/mysql/base
+    provides:
+      GLOBAL_MYSQL_HOST: mysql
+      GLOBAL_MYSQL_PORT: "3306"
+
+  mongodb:
+    description: MongoDB 7 — document database
+    image: mongo:7-jammy
+    port: 27017
+    manifest: infrastructure/mongodb/base
+    provides:
+      GLOBAL_MONGO_URI: mongodb://mongodb:27017
+
+  # ── Caching ────────────────────────────────────────────────────────────────
+
+  redis:
+    description: Redis 7 — cache and session store
+    image: redis:7-alpine
+    port: 6379
+    manifest: infrastructure/redis/base
+    provides:
+      GLOBAL_REDIS_HOST: redis
+      GLOBAL_REDIS_PORT: "6379"
+
+  # ── Messaging ──────────────────────────────────────────────────────────────
+
+  kafka:
+    description: Apache Kafka 3.7 (KRaft, no ZooKeeper)
+    image: apache/kafka:3.7.0
+    port: 9092
+    manifest: infrastructure/kafka/base
+    provides:
+      GLOBAL_KAFKA_BOOTSTRAP: kafka:9092
+
+  rabbitmq:
+    description: RabbitMQ 3 with management UI at :15672
+    image: rabbitmq:3-management-alpine
+    port: 5672
+    manifest: infrastructure/rabbitmq/base
+    provides:
+      GLOBAL_RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
+      GLOBAL_RABBITMQ_HOST: rabbitmq
+      GLOBAL_RABBITMQ_PORT: "5672"
+
+  # ── Cloud emulation ────────────────────────────────────────────────────────
+
+  localstack:
+    description: "LocalStack 3 — AWS emulator (S3, SQS, DynamoDB, SNS, Secrets Manager)"
+    image: localstack/localstack:3
+    port: 4566
+    manifest: infrastructure/localstack/base
+    provides:
+      GLOBAL_AWS_ENDPOINT: http://localstack:4566
+      GLOBAL_AWS_REGION: us-east-1
+      GLOBAL_AWS_ACCESS_KEY_ID: test
+      GLOBAL_AWS_SECRET_ACCESS_KEY: test
+    note: "Use endpoint_url=http://localstack:4566 in your AWS SDK config for local dev."
+
+  minio:
+    description: "MinIO — S3-compatible object storage (lighter than LocalStack)"
+    image: minio/minio:latest
+    port: 9000
+    manifest: infrastructure/minio/base
+    provides:
+      GLOBAL_MINIO_ENDPOINT: http://minio:9000
+      GLOBAL_MINIO_ACCESS_KEY: minioadmin
+      GLOBAL_MINIO_SECRET_KEY: minioadmin
+
+  # ── Search ─────────────────────────────────────────────────────────────────
+
+  elasticsearch:
+    description: Elasticsearch 8 — full-text search and analytics
+    image: elasticsearch:8.13.0
+    port: 9200
+    manifest: infrastructure/elasticsearch/base
+    provides:
+      GLOBAL_ELASTICSEARCH_URL: http://elasticsearch:9200
+
+  opensearch:
+    description: OpenSearch 2 — open-source Elasticsearch alternative
+    image: opensearchproject/opensearch:2
+    port: 9200
+    manifest: infrastructure/opensearch/base
+    provides:
+      GLOBAL_OPENSEARCH_URL: http://opensearch:9200
+
+  # ── AI / ML ────────────────────────────────────────────────────────────────
+
+  ollama:
+    description: "Ollama — run LLMs locally (llama3, mistral, gemma, etc.)"
+    image: ollama/ollama:latest
+    port: 11434
+    manifest: infrastructure/ollama/base
+    provides:
+      GLOBAL_OLLAMA_URL: http://ollama:11434
+    note: |
+      After deploy, pull a model:
+        klight exec ollama --env alice -- ollama pull llama3
+      Or use openai-compatible endpoint:
+        BASE_URL=http://ollama:11434/v1
+
+  chromadb:
+    description: ChromaDB — vector database for AI embeddings
+    image: chromadb/chroma:0.5.3
+    port: 8000
+    manifest: infrastructure/chromadb/base
+    provides:
+      GLOBAL_CHROMA_URL: http://chromadb:8000
+
+  # ── Observability ─────────────────────────────────────────────────────────
+
+  grafana:
+    description: Grafana + Prometheus — metrics and dashboards
+    image: grafana/grafana:latest
+    port: 3000
+    manifest: infrastructure/grafana/base
+    provides:
+      GLOBAL_GRAFANA_URL: http://grafana:3000
+    note: "Opens at http://grafana:3000 — admin/admin in local."
+
+  jaeger:
+    description: Jaeger — distributed tracing (OpenTelemetry compatible)
+    image: jaegertracing/all-in-one:latest
+    port: 16686
+    manifest: infrastructure/jaeger/base
+    provides:
+      GLOBAL_OTEL_ENDPOINT: http://jaeger:4317
+      GLOBAL_JAEGER_UI: http://jaeger:16686
+
+  # ── Secrets ────────────────────────────────────────────────────────────────
+
+  vault:
+    description: HashiCorp Vault — secrets management (dev mode, unsealed)
+    image: hashicorp/vault:1.17
+    port: 8200
+    manifest: infrastructure/vault/base
+    provides:
+      GLOBAL_VAULT_ADDR: http://vault:8200
+      GLOBAL_VAULT_TOKEN: dev-root-token
+    note: "Dev mode only. Token: dev-root-token. UI: klight open vault --env alice"

@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# namespace is injected by klight CLI at apply time.
+# When applying manually: kubectl apply -k . -n env-<name>
+
+resources:
+- ../../../../env/config      # Global ConfigMap (klight-global-config)
+- ../../../../env/secrets     # Global Secrets (klight-global-secrets)  — only if global.env exists
+- ../../base
+
+commonLabels:
+  app: REPLACE_ME_SERVICE_NAME
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+- name: REPLACE_ME_SERVICE_NAME-config
+  envs:
+  - config.env
+  behavior: merge   # Merges with klight-global-config; service keys override global keys

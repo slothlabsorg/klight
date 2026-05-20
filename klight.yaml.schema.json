@@ -1,0 +1,203 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://klight.dev/schema/klight.yaml.json",
+  "title": "klight.yaml",
+  "description": "klight service configuration — adds your service to a klight-managed environment.",
+  "type": "object",
+  "required": ["name", "port"],
+  "additionalProperties": false,
+  "properties": {
+
+    "name": {
+      "type": "string",
+      "description": "Service name. Used as the Kubernetes service name and DNS hostname within the environment. Must be lowercase, DNS-safe (letters, numbers, hyphens).",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "examples": ["my-api", "payments-service", "store-web"]
+    },
+
+    "port": {
+      "type": "integer",
+      "description": "Port your service listens on. klight creates a Kubernetes Service at this port.",
+      "minimum": 1,
+      "maximum": 65535,
+      "examples": [8080, 3000, 8081, 9000]
+    },
+
+    "health": {
+      "type": "string",
+      "description": "HTTP GET path for health checks. klight polls this until it returns 2xx before marking the service ready.",
+      "default": "/health",
+      "examples": ["/health", "/actuator/health", "/api/health", "/"]
+    },
+
+    "image": {
+      "type": "string",
+      "description": "Docker image to deploy. Use 'name:local' for local builds or 'registry/org/service:tag' for CI images.",
+      "examples": ["my-api:local", "ghcr.io/myorg/my-api:main", "123456.dkr.ecr.us-east-1.amazonaws.com/my-api:latest"]
+    },
+
+    "manifest": {
+      "type": "string",
+      "description": "Path to existing Kubernetes manifests (Kustomize overlay). When set, klight uses these instead of generating new ones. klight still manages infra (needs:) and injects sentinel for startup ordering.",
+      "examples": [
+        "./deploy/overlays/dev",
+        "./deploy/base",
+        "../mycompany-infra/manifests/services/my-service/overlays/dev"
+      ]
+    },
+
+    "needs": {
+      "description": "Infrastructure this service needs. klight spins these up in the environment namespace. Each entry maps to klight-catalog.yaml.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Infra name from the catalog (local mode, default).",
+                "examples": ["postgres", "kafka", "redis", "localstack", "mongodb", "ollama"]
+              },
+              {
+                "type": "object",
+                "description": "Infra with mode override (e.g. external for real infra).",
+                "minProperties": 1,
+                "maxProperties": 1,
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": ["local", "external"],
+                      "description": "local = spin up StatefulSet. external = inject env vars pointing to real infra."
+                    }
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "Override env var values provided by this infra."
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "description": "Infra as a map (alternative syntax for mode overrides).",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["local", "external"]
+                  }
+                },
+                "additionalProperties": { "type": "string" }
+              }
+            ]
+          }
+        }
+      ]
+    },
+
+    "depends": {
+      "type": "array",
+      "description": "Services/ports this service waits for before starting. klight configures the sentinel init container with these. Format: 'host:port' or 'host:port/health-path'.",
+      "items": {
+        "type": "string",
+        "examples": [
+          "postgres:5432",
+          "kafka:9092",
+          "inventory-api:8081/health",
+          "other-service:8080/actuator/health"
+        ]
+      }
+    },
+
+    "env": {
+      "type": "object",
+      "description": "Environment variables klight injects into this service's pod. Write the EXACT names your code already reads — no code changes needed. klight also auto-injects vars from declared needs (postgres host, kafka bootstrap, etc.).",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "examples": [
+        {
+          "DB_HOST": "postgres",
+          "DB_NAME": "my_service_db",
+          "KAFKA_BOOTSTRAP_SERVERS": "kafka:9092",
+          "OTHER_SERVICE_URL": "http://other-service:8080"
+        }
+      ]
+    },
+
+    "build": {
+      "type": "object",
+      "description": "Custom build configuration. Only needed if your project doesn't have a standard Dockerfile at the root (e.g. Gradle monorepo, Jib, SBT, Cargo with custom steps).",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Shell command to build the Docker image. klight runs this instead of 'docker build'.",
+          "examples": [
+            "docker build -t billing-service:local .",
+            "./gradlew banking:jib --image=banking:local",
+            "./gradlew bootBuildImage --imageName=my-api:local",
+            "sbt docker:publishLocal",
+            "cargo build --release && docker build -t my-rust-service:local ."
+          ]
+        },
+        "context": {
+          "type": "string",
+          "description": "Working directory for the build command. Useful for monorepos where the build must run from the repo root.",
+          "default": ".",
+          "examples": [".", "../", "../../monorepo-root"]
+        },
+        "tag": {
+          "type": "string",
+          "description": "Docker image tag produced by the build command. Overrides the 'image' field for deployment.",
+          "examples": ["my-api:local", "banking:local"]
+        }
+      }
+    },
+
+    "migration": {
+      "type": "object",
+      "description": "Database migration to run before the service starts. klight creates a Kubernetes Job that runs this command and waits for it to complete.",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Command to run inside the service's Docker image to execute migrations.",
+          "examples": [
+            ["python", "-m", "app.migrate"],
+            ["node", "scripts/migrate.js"],
+            ["./gradlew", "flywayMigrate"],
+            ["npm", "run", "migrate"]
+          ]
+        },
+        "version": {
+          "type": "string",
+          "description": "Migration version label (for documentation, not enforced).",
+          "default": "v1"
+        }
+      }
+    },
+
+    "watch_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Paths to watch for changes when using 'klight watch'. Relative to the klight.yaml location. For monorepos, include all relevant source directories.",
+      "examples": [
+        ["src/"],
+        ["src/", "lib/", "config/"],
+        ["banking/src/", "banking-api-core/src/"]
+      ]
+    }
+  }
+}

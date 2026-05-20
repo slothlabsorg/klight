@@ -1,0 +1,36 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy to env-staging
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        kubeconfig: ${{ secrets.KUBECONFIG }}
+
+    - name: Install klight
+      run: pip install -e klight/
+
+    - name: Ensure staging environment exists
+      run: klight env create staging --with-infra
+
+    - name: Run migrations
+      run: |
+        # klight db migrate my-api --env staging
+        echo "Add migration commands here"
+
+    - name: Deploy services
+      run: |
+        # klight service deploy my-api --env staging --image your-registry/my-api:${{ github.sha }}
+        echo "Add service deploy commands here"
+
+    - name: Verify deployment
+      run: klight status --env staging

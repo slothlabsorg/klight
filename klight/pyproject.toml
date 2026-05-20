@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "klight"
+version = "0.1.0"
+description = "klight — Kubernetes environment manager for startups"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13",
+    "pyyaml>=6",
+    "kubernetes>=29",
+]
+
+[project.scripts]
+klight = "klight.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["klight*"]

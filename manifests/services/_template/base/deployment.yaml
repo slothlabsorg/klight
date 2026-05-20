@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: REPLACE_ME_SERVICE_NAME
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: REPLACE_ME_SERVICE_NAME
+  template:
+    metadata:
+      labels:
+        app: REPLACE_ME_SERVICE_NAME
+    spec:
+      initContainers:
+      - name: sentinel
+        image: REPLACE_ME_SENTINEL_IMAGE  # e.g., your-registry/klight-sentinel:latest
+        env:
+        - name: STARTUP_DEPENDENCIES
+          # Space-separated: "postgres:5432 redis:6379 other-service:8080/actuator/health"
+          # Leave empty string if no dependencies.
+          value: "postgres:5432"
+        - name: SENTINEL_TIMEOUT
+          value: "120"
+
+      containers:
+      - name: REPLACE_ME_SERVICE_NAME
+        image: REPLACE_ME_IMAGE  # e.g., your-registry/my-service:main
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: klight-global-config
+        - configMapRef:
+            name: REPLACE_ME_SERVICE_NAME-config
+        - secretRef:
+            name: klight-global-secrets
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 3

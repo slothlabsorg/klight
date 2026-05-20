@@ -1,0 +1,25 @@
+# Secrets — NEVER commit
+manifests/env/secrets/global.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# Node / Playwright
+node_modules/
+klight-ui/node_modules/
+klight-ui/tests/report/
+klight-ui/package-lock.json
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local kubeconfigs
+*-kubeconfig.yaml

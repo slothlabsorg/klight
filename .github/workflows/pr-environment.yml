@@ -1,0 +1,110 @@
+name: PR Environment
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+env:
+  ENV_NAME: pr-${{ github.event.number }}
+
+jobs:
+  create-or-update:
+    name: Create / Update PR environment
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        kubeconfig: ${{ secrets.KUBECONFIG }}
+
+    - name: Install klight
+      run: pip install -e klight/
+
+    - name: Create environment
+      run: klight env create $ENV_NAME --with-infra
+
+    - name: Seed secrets
+      env:
+        POSTGRES_PASSWORD: ${{ secrets.DEV_POSTGRES_PASSWORD }}
+        REDIS_PASSWORD: ${{ secrets.DEV_REDIS_PASSWORD }}
+        JWT_SECRET: ${{ secrets.DEV_JWT_SECRET }}
+      run: |
+        kubectl -n env-$ENV_NAME create secret generic klight-global-secrets \
+          --from-literal=POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
+          --from-literal=REDIS_PASSWORD=$REDIS_PASSWORD \
+          --from-literal=JWT_SECRET=$JWT_SECRET \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+    - name: Run migrations
+      # Add your service migration commands here
+      run: |
+        # klight db migrate my-api --env $ENV_NAME
+        echo "No migrations configured yet — add them here"
+
+    - name: Deploy services at PR commit
+      # Deploy each service with the image built from this PR's commit
+      run: |
+        # klight service deploy my-api --env $ENV_NAME --image your-registry/my-api:${{ github.sha }}
+        echo "No services configured yet — add them here"
+
+    - name: Comment with environment info
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const envName = process.env.ENV_NAME;
+          const body = [
+            `🚀 **PR Environment Ready**: \`env-${envName}\``,
+            '',
+            '**Access services:**',
+            '```bash',
+            `kubectl -n env-${envName} get pods`,
+            `kubectl -n env-${envName} port-forward svc/my-api 8080:8080`,
+            '```',
+            '',
+            `**Destroy manually:** \`klight env destroy ${envName} --yes\``,
+          ].join('\n');
+
+          // Find existing comment
+          const comments = await github.rest.issues.listComments({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+          });
+          const existing = comments.data.find(c => c.body.includes('PR Environment Ready'));
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              comment_id: existing.id,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+          }
+
+  destroy:
+    name: Destroy PR environment
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        kubeconfig: ${{ secrets.KUBECONFIG }}
+
+    - name: Install klight
+      run: pip install -e klight/
+
+    - name: Destroy environment
+      run: klight env destroy $ENV_NAME --yes
