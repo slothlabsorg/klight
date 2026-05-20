@@ -82,7 +82,7 @@ def setup(
         "--driver=docker",
         f"--cpus={cpus}",
         f"--memory={memory}",
-        "--kubernetes-version=stable",
+        "--kubernetes-version=v1.30.0",
     ])
 
     if result.returncode != 0:

@@ -286,6 +286,16 @@ def connect_cluster(
 
 
 @app.command()
+def destroy(
+    name: str = typer.Argument(..., help="Environment name to destroy"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+) -> None:
+    """Delete an environment and all its resources."""
+    from klight.commands.env import destroy as _destroy
+    _destroy(name, yes=yes)
+
+
+@app.command()
 def sync(
     url: str = typer.Argument("", help="URL to klight-team.yaml"),
     force: bool = typer.Option(False, "--force", "-f"),
