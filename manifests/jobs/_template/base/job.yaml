@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: REPLACE_ME_SERVICE_NAME-dbmigrate
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+      - name: sentinel
+        image: REPLACE_ME_SENTINEL_IMAGE  # e.g., your-registry/klight-sentinel:latest
+        env:
+        - name: STARTUP_DEPENDENCIES
+          value: "postgres:5432"
+        - name: SENTINEL_TIMEOUT
+          value: "120"
+
+      containers:
+      - name: migrate
+        # Use your service's image (if it contains migrations),
+        # or a dedicated migration image (flyway, liquibase, etc.)
+        image: REPLACE_ME_MIGRATION_IMAGE
+        # command: ["flyway", "migrate"]  # example for Flyway
+        # command: ["./gradlew", "flywayMigrate"]  # example for Gradle Flyway plugin
+        env:
+        - name: DB_HOST
+          value: postgres
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: REPLACE_ME_DB_NAME
+        - name: DB_USER
+          value: klight
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: klight-global-secrets
+              key: POSTGRES_PASSWORD
+        # Common framework env vars (uncomment as needed):
+        # - name: SPRING_DATASOURCE_URL
+        #   value: jdbc:postgresql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)
+        # - name: FLYWAY_URL
+        #   value: jdbc:postgresql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)
+        # - name: FLYWAY_USER
+        #   value: $(DB_USER)
+        # - name: FLYWAY_PASSWORD
+        #   value: $(DB_PASSWORD)

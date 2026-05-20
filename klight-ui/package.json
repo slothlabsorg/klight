@@ -1,0 +1,13 @@
+{
+  "name": "klight-ui-tests",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "^1.44"
+  },
+  "scripts": {
+    "screenshots": "playwright test",
+    "screenshots:w1": "playwright test tests/world1-local.spec.ts",
+    "screenshots:w2": "playwright test tests/world2-sync.spec.ts",
+    "screenshots:w3": "playwright test tests/world3-remote.spec.ts"
+  }
+}

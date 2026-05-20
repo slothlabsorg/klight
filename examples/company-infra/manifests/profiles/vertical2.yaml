@@ -1,0 +1,15 @@
+name: vertical2
+description: "Vertical 2 — includes core + vertical2 own services"
+
+includes:
+  - core   # same core services, same infra, nothing duplicated
+
+migrations:
+  - job: vertical2-migrate
+    db: vertical2_db
+
+services:
+  - name: vertical2-api   # calls core-api via http://core-api:8081
+
+healthChecks:
+  - vertical2-api:8083/actuator/health

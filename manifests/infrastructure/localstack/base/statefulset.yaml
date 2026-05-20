@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: localstack
+spec:
+  serviceName: localstack
+  replicas: 1
+  selector:
+    matchLabels:
+      app: localstack
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests:
+          storage: 2Gi
+  template:
+    metadata:
+      labels:
+        app: localstack
+    spec:
+      containers:
+      - name: localstack
+        image: localstack/localstack:3
+        ports:
+        - containerPort: 4566
+          name: gateway
+        - containerPort: 4510
+          name: ext
+        env:
+        - name: SERVICES
+          value: s3,sqs,dynamodb,sns,secretsmanager
+        - name: DEFAULT_REGION
+          value: us-east-1
+        - name: PERSISTENCE
+          value: "1"
+        - name: LOCALSTACK_HOST
+          value: localstack
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /_localstack/health
+            port: 4566
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /_localstack/health
+            port: 4566
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/localstack

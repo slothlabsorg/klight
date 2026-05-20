@@ -1,0 +1,47 @@
+name: store
+description: "TiendaDemo — 2 backends, Kafka, 2 databases, 1 frontend"
+
+infrastructure:
+  - postgres
+  - redis
+  - kafka
+
+migrations:
+  - job: inventory-api-dbmigrate
+    image: inventory-api:local
+    db: inventory_db
+  - job: store-api-dbmigrate
+    image: store-api:local
+    db: store_db
+
+services:
+  - name: inventory-api
+    port: 8081
+    startupDeps:
+      - postgres:5432
+      - kafka:9092
+  - name: store-api
+    port: 8080
+    startupDeps:
+      - postgres:5432
+      - kafka:9092
+      - inventory-api:8081/health
+  - name: store-web
+    port: 3000
+    startupDeps:
+      - store-api:8080/health
+
+kafka:
+  topics:
+    - name: sale.created
+      producer: store-api
+      consumer: inventory-api
+      schema:
+        product_id: int
+        quantity: int
+        timestamp: string
+
+healthChecks:
+  - inventory-api:8081/health
+  - store-api:8080/health
+  - store-web:3000/

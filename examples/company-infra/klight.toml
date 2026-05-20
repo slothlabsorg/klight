@@ -1,0 +1,17 @@
+# klight.toml — commit this to your infra repo.
+# Defines cluster targets so new devs just need to run:
+#   klight use local   → minikube on their laptop
+#   klight use remote  → company's shared dev cluster
+
+[targets]
+default = "local"
+local   = "klight-demo"          # minikube profile name
+remote  = "company-dev"          # kubectl context for remote cluster
+
+[remote]
+api_url          = "https://k8s.dev.mycompany.com"
+namespace_prefix = "env"         # namespaces: env-alice, env-pr-123
+
+[images]
+registry = "ghcr.io/mycompany"   # CI images: ghcr.io/mycompany/core-api:main
+sentinel = "klight-sentinel:latest"

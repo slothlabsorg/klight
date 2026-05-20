@@ -1,0 +1,19 @@
+name: core
+description: "Shared core services — used by all verticals"
+
+infrastructure:
+  - postgres
+  - redis
+  - kafka
+
+migrations:
+  - job: core-auth-migrate
+    db: auth_db
+
+services:
+  - name: core-auth      # authentication / JWT — both verticals depend on this
+  - name: core-api       # shared business logic API
+
+healthChecks:
+  - core-auth:8080/actuator/health
+  - core-api:8081/actuator/health

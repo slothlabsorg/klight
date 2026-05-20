@@ -1,0 +1,21 @@
+name: vertical1
+description: "Vertical 1 — includes core + vertical1 own services"
+
+# Pulls in core.yaml first (core-auth, core-api, postgres, redis, kafka).
+# Devs don't need to know which core services exist.
+includes:
+  - core
+
+# Additional infra only vertical1 needs
+infrastructure: []   # kafka + postgres + redis already from core
+
+migrations:
+  - job: vertical1-migrate
+    db: vertical1_db
+
+services:
+  # vertical1-api calls core-api internally via K8s DNS
+  - name: vertical1-api
+
+healthChecks:
+  - vertical1-api:8082/actuator/health

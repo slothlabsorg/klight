@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: store-api-dbmigrate
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+      - name: sentinel
+        image: klight-sentinel:latest
+        imagePullPolicy: Never
+        env:
+        - name: STARTUP_DEPENDENCIES
+          value: "postgres:5432"
+        - name: SENTINEL_TIMEOUT
+          value: "120"
+      containers:
+      - name: migrate
+        image: store-api:local
+        imagePullPolicy: Never
+        command: ["python", "-m", "app.migrate"]
+        env:
+        - name: DB_HOST
+          value: postgres
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: store_db
+        - name: DB_USER
+          value: klight
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: klight-global-secrets
+              key: POSTGRES_PASSWORD
+        - name: MIGRATION_VERSION
+          value: "v1"
