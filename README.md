@@ -1,351 +1,249 @@
 # klight
 
-> Run your app locally exactly like in production — without knowing Kubernetes exists.
+> Run your full microservices stack locally — or on a shared cloud cluster — with two commands.
 
-klight gives every developer an isolated, full-stack environment on their laptop or on a shared cluster. One command brings up databases, message brokers, and all your services in the right order. Another command tears it all down.
-
-Inspired by how SoFi's internal Kraken platform works for 500+ engineers across 840+ microservices. klight brings those patterns to teams of 3–50.
+klight gives every developer an isolated, full-stack environment without knowing Kubernetes exists. One command brings up databases, message brokers, and all your services in the right order. Another tears everything down.
 
 ---
 
-## Quick start (5 minutes)
+## Three scenarios
+
+### Scenario 1 — Solo dev, local code
+
+You have the code. No CI pipeline. You want a real stack, not Docker Compose hacks.
 
 ```bash
-pip install klight
-klight local setup                          # starts minikube (first time: ~3 min)
-klight from-repos ./my-api ./my-worker --env alice
-klight open my-api --env alice              # opens browser
+klight local setup                                          # start minikube (once)
+klight local build-load store-api --path ./store-api        # build + load into cluster
+klight up store --env dev                                   # full stack in 90 seconds
+klight replace store-api --with ./store-api --env dev       # edit → rebuild → hot-swap
 ```
 
-That's it. No Kubernetes YAML. No Docker Compose. No "works on my machine."
+### Scenario 2 — Team, sync from Git (no local clones)
+
+New team member. You don't clone any service repo. The stack runs from CI images.
+
+```bash
+klight sync https://raw.githubusercontent.com/your-org/infra/main/klight-team.yaml
+klight up store --env alice                                 # postgres + kafka + 3 services
+```
+
+![5 services running, all green](klight-ui/tests/screenshots/world2-sync/03-tienda-running.png)
+
+### Scenario 3 — Remote cluster (EKS, GKE, AKS)
+
+Team outgrew local minikube. DevOps runs one command; devs connect with a token.
+
+```bash
+# DevOps (once, on the remote cluster):
+klight cluster setup-remote                                 # creates SA + RBAC + prints token
+
+# Dev (once per laptop):
+klight connect --url https://cluster.company.com --token eyJ...
+klight use remote
+klight up store --env alice                                 # same commands, cloud cluster
+```
+
+---
+
+## The UI
+
+`klight ui` opens a dashboard at `http://localhost:7700`. It follows whatever cluster is active.
+
+**Cluster status bar** — always shows where you're running and how much RAM is available:
+
+![Cluster status bar showing klight-demo 2 CPUs 3.0GB OK](klight-ui/tests/screenshots/world2-sync/02-cluster-status-bar.png)
+
+**Smart sizing** — before you deploy, klight estimates memory needs for your profile and warns you before pods get OOMKilled:
+
+![Sizing banner showing Profile store 2.8 GB fits](klight-ui/tests/screenshots/world2-sync/06b-new-env-sizing-banner.png)
+
+**Live logs** — click any service card to see real-time logs:
+
+![Service cards with logs panel open](klight-ui/tests/screenshots/world2-sync/05-logs-inventory-api.png)
+
+**Setup Wizard** — for DevOps: connect your Git platform, scan repos, generate `klight.yaml` files, and create `klight-team.yaml` without cloning anything:
+
+![Setup Wizard tab](klight-ui/tests/screenshots/world2-sync/08-setup-wizard-tab.png)
 
 ---
 
 ## How it works
 
-Each service adds a `klight.yaml` (10–20 lines). klight reads it and knows:
-- What infrastructure to start (postgres, kafka, redis, S3...)
-- What order to start services (dependency graph)
-- What environment variables to inject (the names your code already reads)
-- How to build the Docker image (standard Dockerfile or custom command)
-
-```
-your-cluster/
-├── namespace: env-alice     ← your full stack, isolated
-│   ├── postgres StatefulSet
-│   ├── kafka StatefulSet
-│   ├── my-api Deployment    → reads DB_HOST=postgres (injected by klight)
-│   └── my-worker Deployment → reads KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-│
-└── namespace: env-pr-123    ← PR environment, auto-created on PR open
-```
-
----
-
-## The klight.yaml
-
-Add one to your service repo. The VS Code extension gives you autocomplete.
+### The `klight.yaml` (add one to each service repo)
 
 ```yaml
 # yaml-language-server: $schema=https://klight.dev/schema/klight.yaml.json
-name: my-api
-port: 8080
-health: /health
-
-needs: [postgres, kafka]   # klight starts these in the namespace
-
-env:
-  # Write the EXACT env var names your code already reads.
-  # klight injects these — zero code changes needed.
-  DB_HOST: postgres
-  DB_NAME: my_api_db
-  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-  OTHER_SERVICE_URL: http://other-service:8081
-```
-
----
-
-## Examples by language and scenario
-
-### Simple Python service
-
-```yaml
 name: inventory-api
 port: 8081
 health: /health
-needs: [postgres, kafka]
+
+needs: [postgres, kafka]        # klight starts these, waits for them, wires up env vars
+
 migration:
-  command: ["python", "-m", "app.migrate"]
-env:
+  command: ["python", "-m", "app.migrate"]   # runs as a Job before the service starts
+
+env:                            # exact var names your code already reads
   DB_HOST: postgres
   DB_NAME: inventory_db
   KAFKA_BOOTSTRAP_SERVERS: kafka:9092
 ```
 
-### Node.js service
+That's it. Zero changes to application code. No Kubernetes YAML to write.
 
-```yaml
-name: sales-recorder
-port: 3002
-health: /health
-needs: [postgres, kafka]
-env:
-  DB_HOST: postgres
-  DB_NAME: sales_db
-  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-```
-
-### Kotlin / Spring Boot (standard Dockerfile)
-
-```yaml
-name: billing-service
-port: 8082
-health: /actuator/health
-needs: [kafka, localstack]
-env:
-  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-  AWS_ENDPOINT_URL: http://localstack:4566   # LocalStack in dev, empty = real AWS
-  S3_BUCKET_NAME: invoices
-  TWILIO_ACCOUNT_SID: ""   # optional — leave empty to log SMS instead of sending
-```
-
-### Spring Boot with Gradle Jib (no Dockerfile)
-
-```yaml
-name: banking
-port: 8080
-health: /actuator/health
-build:
-  command: ./gradlew banking:jib --image=banking:local
-  context: ../                 # monorepo root
-watch_paths:
-  - banking/src/
-  - banking-api-core/src/      # shared library this service uses
-needs: [postgres, kafka, redis]
-env:
-  SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/banking_db
-  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-  SPRING_DATA_REDIS_HOST: redis
-```
-
-### Quarkus (Maven)
-
-```yaml
-name: quarkus-api
-port: 8080
-health: /q/health
-build:
-  command: ./mvnw package -Dquarkus.container-image.build=true -Dquarkus.container-image.name=quarkus-api -Dquarkus.container-image.tag=local
-needs: [postgres]
-env:
-  QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres:5432/quarkus_db
-```
-
-### Rust (with Dockerfile)
-
-```yaml
-name: data-processor
-port: 9000
-health: /health
-# Has a Dockerfile — klight uses it automatically, no build: needed
-needs: [kafka, redis]
-env:
-  KAFKA_BROKERS: kafka:9092
-  REDIS_URL: redis://redis:6379
-```
-
-### Service with existing K8s manifests in deploy/ folder
-
-The service team already wrote their K8s YAML. klight uses it as-is:
-
-```yaml
-name: sales-recorder
-port: 3002
-manifest: ./deploy/overlays/dev   # use existing manifests, don't generate new ones
-needs: [postgres, kafka]           # klight still manages infra startup
-```
-
-klight injects `sentinel` (startup ordering) as a transparent patch — the `deploy/` files stay clean.
-
-### Service pointing to a separate DevOps/infra repo
-
-```yaml
-name: payments-api
-port: 8080
-manifest: ../mycompany-infra/manifests/services/payments-api/overlays/dev
-needs: [postgres, kafka]
-```
-
-Or set `KLIGHT_MANIFESTS_DIR=../mycompany-infra/manifests` — klight auto-finds the service manifest.
-
-### Using real external infra (instead of local StatefulSet)
-
-Connect to a real Redis, real Kafka, etc. for debugging against staging data:
-
-```yaml
-name: my-api
-port: 8080
-needs:
-  postgres:
-    mode: local                         # start local postgres StatefulSet
-  kafka:
-    mode: external                      # don't start kafka, point to real one
-    KAFKA_BOOTSTRAP_SERVERS: kafka.staging.mycompany.com:9092
-```
-
-### Adding AI / ML infrastructure
-
-```yaml
-name: recommendation-engine
-port: 8080
-needs: [postgres, ollama, chromadb]   # runs Ollama (LLMs) + ChromaDB locally
-env:
-  OLLAMA_BASE_URL: http://ollama:11434
-  CHROMA_URL: http://chromadb:8000
-```
-
-After deploy, pull a model:
-```bash
-klight exec ollama --env alice -- ollama pull llama3
-```
-
----
-
-## Three team scenarios
-
-### Scenario A — Dev with no K8s knowledge (zero config)
-
-```bash
-git clone my-service-repo
-pip install klight
-klight local setup
-klight init ./my-service-repo     # scan repo, ask 3 questions, generate klight.yaml
-klight from-repos ./my-service-repo --env alice
-klight ui                         # open dashboard
-```
-
-### Scenario B — Self-service team (klight.yaml as part of delivery)
-
-```bash
-# Each service repo has klight.yaml already committed by the team
-git clone store-api inventory-api store-web
-klight local setup
-klight from-repos ./store-api ./inventory-api ./store-web --env alice
-```
-
-### Scenario C — DevOps team manages central infra repo
-
-```bash
-git clone mycompany-infra
-# Profiles in mycompany-infra/manifests/profiles/payments.yaml
-klight up payments --env alice
-```
-
----
-
-## CLI reference
-
-### Environment management
-```bash
-klight env create alice [--with-infra]     # create isolated environment
-klight env list                            # list all environments
-klight env destroy alice --yes             # destroy environment
-klight env pause alice                     # scale to 0 (save resources)
-klight env resume alice
-```
-
-### Deploying from repos
-```bash
-klight from-repos ./svc-a ./svc-b --env alice          # klight.yaml → deploy
-klight from-repos ./svc-a --env alice --timeout 300
-```
-
-### Profiles (grouped services)
-```bash
-klight up payments --env alice             # profile defined in manifests/profiles/
-klight down payments --env alice
-```
-
-### Service operations
-```bash
-klight ps --env alice                      # pretty status table
-klight unready --env alice                 # show broken services + fix hints
-klight logs my-api --env alice -f          # stream logs
-klight open my-api --env alice             # port-forward + open browser
-klight exec my-api --env alice -- sh       # exec into pod by service name
-klight service restart my-api --env alice  # rolling restart
-```
-
-### Database operations
-```bash
-klight db connect postgres --env alice           # open psql
-klight db query --env alice --db my_db "SELECT count(*) FROM users"
-klight db migrate my-api --env alice             # run migration job
-```
-
-### Local development
-```bash
-klight local setup                               # start minikube klight-demo
-klight local build-load my-api --path ./my-api   # docker build + minikube image load
-klight local status                              # show minikube status + loaded images
-klight preflight ./my-api ./my-worker            # check what images are missing
-klight preflight ./my-api --fix                  # auto-build/pull missing images
-klight watch my-api --env alice --path ./my-api  # hot reload on file change
-```
-
-### UI and init
-```bash
-klight ui                                        # open web dashboard (localhost:7700)
-klight init ./my-service                         # generate klight.yaml from Dockerfile scan
-klight init ./my-service --yes                   # non-interactive (use detected defaults)
-```
-
----
-
-## The infra catalog
-
-klight ships with built-in infrastructure. Add custom entries without modifying klight.
-
-**Built-in:** `postgres`, `mysql`, `mongodb`, `redis`, `kafka`, `rabbitmq`, `localstack`, `elasticsearch`, `ollama`, `chromadb`, `vault`
-
-**Add your own** in `klight-catalog.yaml` at your project root:
+### The `klight-team.yaml` (DevOps puts this in the infra repo)
 
 ```yaml
 version: "1"
-infra:
-  my-vector-db:
-    description: Custom vector database
-    image: qdrant/qdrant:v1.8.4
-    port: 6333
-    manifest: infrastructure/qdrant/base   # optional K8s manifest
-    provides:
-      MY_VECTOR_DB_URL: http://my-vector-db:6333
+team: my-company
 
-  company-redis-cluster:
-    description: Company Redis Cluster
-    image: redis:7-alpine
-    port: 6379
-    provides:
-      REDIS_URL: redis://company-redis-cluster:6379
+source:
+  type: git
+  url: https://github.com/my-company/infra
+  branch: main
+
+services:
+  - name: store-api
+    image: ghcr.io/my-company/store-api:main        # registry-agnostic: ECR, GCR, GHCR
+    repo: https://github.com/my-company/store-api
+  - name: inventory-api
+    image: ghcr.io/my-company/inventory-api:main
+    repo: https://github.com/my-company/inventory-api
+
+profiles:
+  store: [inventory-api, store-api, store-web]      # groups of services to deploy together
+  full:  [inventory-api, store-api, store-web, sales-recorder]
+```
+
+Developers run `klight sync <url>` once and get the full team configuration cached locally. After that `klight up store --env alice` works without cloning any service repo.
+
+### What klight does when you run `klight up`
+
+```
+your cluster
+└── namespace: env-alice          ← isolated, created fresh
+
+    ┌─ postgres StatefulSet       ← starts first (needs: [postgres])
+    ├─ kafka StatefulSet          ← starts first (needs: [kafka])
+    │
+    ├─ inventory-api-migrate Job  ← runs after postgres is ready
+    │
+    ├─ inventory-api Deployment   ← sentinel init container waits for postgres + kafka
+    ├─ store-api Deployment       ← same: waits for its dependencies
+    └─ store-web Deployment       ← starts after store-api is healthy
+```
+
+Each service gets a configmap with its env vars, a ClusterIP service for DNS discovery, and a `sentinel` init container that blocks startup until its dependencies are healthy. You never write any of this — klight generates it from `klight.yaml`.
+
+---
+
+## Built-in infrastructure catalog
+
+Add any of these to `needs:` in your `klight.yaml`:
+
+| Name | Image | What it provides |
+|------|-------|-----------------|
+| `postgres` | postgres:16-alpine | `DB_HOST`, `DB_PORT` |
+| `kafka` | apache/kafka:3.7.0 | `KAFKA_BOOTSTRAP_SERVERS` |
+| `redis` | redis:7-alpine | `REDIS_HOST`, `REDIS_PORT` |
+| `mongodb` | mongo:7 | `MONGODB_URI` |
+| `rabbitmq` | rabbitmq:3-management | `RABBITMQ_URL` |
+| `localstack` | localstack/localstack:3 | `AWS_ENDPOINT_URL`, `AWS_*` |
+| `elasticsearch` | elasticsearch:8 | `ELASTICSEARCH_URL` |
+
+Add your own in `klight-catalog.yaml` at your project root — no changes to klight needed.
+
+---
+
+## Developer reference
+
+### Local cluster
+
+```bash
+klight local setup                               # start minikube klight-demo (2 CPUs, 3 GB)
+klight local setup --cpus 4 --memory 6144        # larger cluster for heavy profiles
+klight local resize --memory 4096               # resize without destroying data
+klight local build-load <svc> --path <dir>       # docker build + minikube image load
+klight local status                              # show cluster status + loaded images
+```
+
+### Environments
+
+```bash
+klight up <profile> --env <name>                 # create namespace + deploy full profile
+klight ps --env <name>                           # pod status table
+klight logs <svc> --env <name>                   # tail logs
+klight logs <svc> --env <name> -c sentinel       # see what an init container is waiting for
+klight open <svc> --env <name>                   # port-forward + open browser
+klight exec <svc> --env <name> -- sh             # shell into running pod
+klight replace <svc> --with <dir> --env <name>   # hot-swap with local build
+klight destroy <name>                            # delete namespace + everything in it
+```
+
+### Team sync
+
+```bash
+klight sync <url>                                # download klight-team.yaml + cache configs
+```
+
+### Cluster targets
+
+```bash
+klight use local                                 # switch to minikube klight-demo
+klight use remote                                # switch to configured remote cluster
+klight target                                    # show current target
+klight connect --url <u> --token <t>             # register remote cluster
+klight connect --kubeconfig <path>               # import kubeconfig (kubeconfig path)
+```
+
+### Remote cluster setup (DevOps)
+
+```bash
+# Run on the remote cluster (needs cluster-admin):
+klight cluster setup-remote
+# Creates:
+#   Namespace: klight-system
+#   ServiceAccount: klight-dev
+#   ClusterRole: create/delete env-* namespaces + full access inside them
+#   ClusterRoleBinding: klight-dev
+#   Token: valid 1 year → share with devs via klight connect
+```
+
+### UI
+
+```bash
+klight ui                                        # http://localhost:7700
 ```
 
 ---
 
-## klight.yaml autocomplete in VS Code
+## DevOps guide — setting up a team
 
-Add to `.vscode/settings.json`:
-```json
-{
-  "yaml.schemas": {
-    "https://klight.dev/schema/klight.yaml.json": "klight.yaml"
-  }
-}
+### Step 1: Add `klight.yaml` to each service repo
+
+Each service gets a `klight.yaml` at the repo root. Use the Setup Wizard (`klight ui` → Setup Wizard tab) to scan your org and generate these automatically, or write them manually. A minimal one takes 5 minutes.
+
+### Step 2: Create `klight-team.yaml` in your infra repo
+
+The team config lives in your central infra/platform repo. It lists services, their CI images, and how they're grouped into profiles. The Setup Wizard generates this for you.
+
+### Step 3: Configure remote access (optional, for shared cluster)
+
+```bash
+kubectl config use-context your-cluster
+klight cluster setup-remote
 ```
 
-Or add to the top of your `klight.yaml`:
-```yaml
-# yaml-language-server: $schema=https://klight.dev/schema/klight.yaml.json
+Copy the printed `klight connect ...` command into your onboarding docs or Slack.
+
+### Step 4: Onboard a new developer
+
+Share one URL:
 ```
+klight sync https://raw.githubusercontent.com/your-org/infra/main/klight-team.yaml
+```
+
+That's the entire onboarding doc.
 
 ---
 
@@ -353,62 +251,47 @@ Or add to the top of your `klight.yaml`:
 
 | | Docker Compose | klight |
 |---|---|---|
-| Isolation | Shared network | Each dev gets their own namespace |
-| Scale | One instance per machine | 10 devs = 10 isolated stacks |
-| CI/CD | Manual or custom scripts | Built-in PR environments |
-| K8s parity | Only Docker containers | Real Kubernetes — staging/prod match |
-| Multi-service | Yes | Yes + dependency ordering |
-| Existing K8s manifests | No | Yes — use deploy/ as-is |
-| Service mesh | No | Yes (if enabled) |
+| Isolation | Shared network, shared volumes | Each dev gets their own namespace |
+| Multiple envs on one machine | Manual port conflicts | `env-alice`, `env-bob`, `env-pr-123` all coexist |
+| Production parity | Docker containers only | Real Kubernetes — matches staging/prod |
+| CI/PR environments | Manual setup | `klight up <profile> --env pr-123` in CI |
+| Existing K8s manifests | Not supported | `manifest: ./deploy/overlays/dev` in klight.yaml |
+| Startup ordering | `depends_on` (process-level) | `sentinel` init container (pod-level, same as prod) |
+| Remote cluster | Not supported | `klight use remote` → same commands |
+| Team config | Each dev maintains their own | Sync from central `klight-team.yaml` |
 
 ---
 
-## Troubleshooting
+## Repository layout
 
-**Pod stuck in `Init:0/1`**
-```bash
-klight logs my-api --env alice -c sentinel   # see what sentinel is waiting for
-kubectl -n env-alice describe pod <pod>      # see events
 ```
-
-**`klight from-repos` says image missing**
-```bash
-klight preflight ./my-api ./my-worker        # shows exactly what's missing
-klight preflight --fix                       # auto-fix
-```
-
-**Wrong kubectl context (deployed to wrong cluster)**
-```bash
-kubectl config current-context              # check where you are
-kubectl config use-context klight-demo      # switch to minikube
-# Or use: export KUBECONFIG=/tmp/klight-demo.yaml
-```
-
-**Service crashes immediately**
-```bash
-klight logs my-api --env alice              # check app logs
-klight unready --env alice                  # quick health summary
-```
-
-**Kafka consumer not receiving messages**
-```bash
-klight exec kafka --env alice -- /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --list
+klight/          Python CLI package (pip install klight)
+klight-ui/       FastAPI dashboard server + Playwright tests
+manifests/       K8s templates for infrastructure + service scaffold
+sentinel/        busybox init container for startup ordering
+examples/        Working examples: tienda demo, company-infra structure
+docs/            In-depth guides for each feature area
+WORKSHOP.md      Video scripts for World 1, 2, 3 with speech + screen actions
 ```
 
 ---
 
-## Product roadmap
+## Quick start
 
-- [x] Core: env create/destroy, from-repos, profiles
-- [x] Dev UX: ps, unready, open, exec, watch, preflight
-- [x] Existing manifests: manifest: field in klight.yaml
-- [x] External infra: mode: external in needs
-- [x] Extendable catalog: klight-catalog.yaml
-- [x] Web UI: klight ui (localhost:7700)
-- [ ] Helm chart for cluster installation (klight-operator)
-- [ ] Web UI: enrollment wizard, live log streaming
-- [ ] `klight ai diagnose` — Claude explains pod failures
-- [ ] TTL operator: auto-destroy PR environments
-- [ ] Cost reporting: `klight cost --env alice`
-- [ ] GitHub App: auto PR environments + comments
+```bash
+pip install klight
+
+# Option A: local dev (you have the code)
+klight local setup
+klight local build-load my-api --path ./my-api
+klight up my-profile --env dev
+
+# Option B: team sync (no local repos needed)
+klight sync https://raw.githubusercontent.com/your-org/infra/main/klight-team.yaml
+klight up store --env alice
+
+# Open the UI
+klight ui
+```
+
+For a walkthrough of all three scenarios with screenshots and speech scripts, see [WORKSHOP.md](WORKSHOP.md).
