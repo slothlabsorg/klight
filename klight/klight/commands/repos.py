@@ -15,8 +15,8 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
-from klight import kubectl as k
-from klight.schema import KlightConfig, KNOWN_INFRA
+from klight import kubectl as k, catalog as cat
+from klight.schema import KlightConfig
 
 app = typer.Typer()
 console = Console()
@@ -82,10 +82,11 @@ def up_from_repos(
         console.print(f"[green]✓[/green] Loaded {klf.parent.name}/klight.yaml → [cyan]{cfg.name}[/cyan]:{cfg.port}")
 
     # Resolve all infra needed across all services
-    all_infra = set()
+    all_infra: set[str] = set()
     for cfg in configs:
-        all_infra.update(cfg.needs)
-    all_infra = all_infra & KNOWN_INFRA.keys()
+        for need in cfg.needs:
+            all_infra.add(need.name if hasattr(need, "name") else str(need))
+    all_infra = all_infra & cat.load().keys()
 
     console.print(f"\n[bold]Infra needed:[/bold] {', '.join(sorted(all_infra)) or 'none'}")
 
@@ -96,7 +97,7 @@ def up_from_repos(
     from klight import kubectl as kctl
     manifests_dir = kctl.get_manifests_dir()
     for infra_name in sorted(all_infra):
-        infra_path = manifests_dir / KNOWN_INFRA[infra_name]["manifest_dir"]
+        infra_path = manifests_dir / cat.manifest_dir(infra_name)
         if infra_path.exists():
             console.print(f"\n  Deploying {infra_name}...")
             k.apply_kustomize(infra_path, ns)

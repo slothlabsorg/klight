@@ -57,66 +57,7 @@ def from_repos(
       klight from-repos ./store-api ./inventory-api ./store-web --env alice
     """
     from klight.commands.repos import up_from_repos
-    # Invoke directly with the args (repos is already a list of Paths)
-    import sys
-    from klight.commands.repos import _ensure_namespace, _sort_by_deps, _apply_manifest, _wait_job, _wait_deployment, _print_summary
-    from klight.schema import KlightConfig, KNOWN_INFRA
-    from klight import kubectl as k, manifest_gen
-    from rich.console import Console
-    console = Console()
-
-    ns = f"env-{env_name}"
-
-    configs: list[KlightConfig] = []
-    for repo_path in repos:
-        klf = repo_path.resolve() / "klight.yaml"
-        if not klf.exists():
-            console.print(f"[red]No klight.yaml in {repo_path}[/red]  →  run: klight init {repo_path}")
-            raise typer.Exit(1)
-        cfg = KlightConfig.from_file(klf)
-        configs.append(cfg)
-        console.print(f"[green]✓[/green] {klf.parent.name}/klight.yaml  [cyan]{cfg.name}[/cyan]:{cfg.port}  needs={cfg.needs or '[]'}")
-
-    all_infra = set()
-    for cfg in configs:
-        all_infra.update(cfg.needs)
-    all_infra = all_infra & KNOWN_INFRA.keys()
-
-    console.print(f"\n[bold]Infra:[/bold] {', '.join(sorted(all_infra)) or 'none'}")
-    _ensure_namespace(ns, env_name)
-
-    manifests_dir = k.get_manifests_dir()
-    for infra_name in sorted(all_infra):
-        infra_path = manifests_dir / KNOWN_INFRA[infra_name]["manifest_dir"]
-        if infra_path.exists():
-            console.print(f"  deploying {infra_name}...")
-            k.apply_kustomize(infra_path, ns)
-        else:
-            console.print(f"[yellow]  {infra_name}: manifest not found at {infra_path}[/yellow]")
-
-    if all_infra:
-        for infra_name in sorted(all_infra):
-            k.run(["wait", "--for=condition=ready", f"pod/{infra_name}-0", "-n", ns, "--timeout=120s"], capture=False)
-
-    ordered = _sort_by_deps(configs)
-
-    for cfg in ordered:
-        console.print(f"\n[bold]Deploying[/bold] {cfg.name}...")
-        k.run(["delete", "job", f"{cfg.name}-migrate", "-n", ns, "--ignore-not-found"])
-        for manifest in manifest_gen.all_manifests(cfg):
-            _apply_manifest(manifest, ns)
-        if cfg.migration:
-            console.print(f"  waiting for migration...")
-            if not _wait_job(f"{cfg.name}-migrate", ns):
-                console.print(f"[red]  Migration failed.[/red]  kubectl logs -n {ns} job/{cfg.name}-migrate")
-                raise typer.Exit(1)
-
-    console.print(f"\n[bold]Waiting for all services...[/bold]")
-    for cfg in ordered:
-        _wait_deployment(cfg.name, ns, timeout=timeout)
-
-    console.print(f"\n[bold green]Done! '{env_name}' is ready.[/bold green]")
-    _print_summary(ordered, ns, env_name)
+    up_from_repos(repos=repos, env_name=env_name, timeout=timeout)
 
 
 @app.command()
