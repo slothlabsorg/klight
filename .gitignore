@@ -13,7 +13,8 @@ dist/
 # Node / Playwright
 node_modules/
 klight-ui/node_modules/
-klight-ui/tests/report/
+klight-ui/tests/report/html/
+klight-ui/tests/report/artifacts/
 klight-ui/package-lock.json
 
 # Editor

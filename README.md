@@ -14,10 +14,14 @@ You have the code. No CI pipeline. You want a real stack, not Docker Compose hac
 
 ```bash
 klight local setup                                          # start minikube (once)
-klight local build-load store-api --path ./store-api        # build + load into cluster
-klight up store --env dev                                   # full stack in 90 seconds
+klight local build-load inventory-api --path ./inventory-api
+klight local build-load store-api     --path ./store-api
+klight local build-load store-web     --path ./store-web
+klight from-repos ./inventory-api ./store-api ./store-web --env dev
 klight replace store-api --with ./store-api --env dev       # edit → rebuild → hot-swap
 ```
+
+![dev 5/5 ready — local builds](klight-ui/tests/screenshots/world1-local/03-env-dev-running-local.png)
 
 ### Scenario 2 — Team, sync from Git (no local clones)
 
@@ -40,9 +44,11 @@ klight cluster setup-remote                                 # creates SA + RBAC 
 
 # Dev (once per laptop):
 klight connect --url https://cluster.company.com --token eyJ...
-klight use remote
+klight use klight-remote
 klight up store --env alice                                 # same commands, cloud cluster
 ```
+
+![alice 5/5 ready — remote cluster, CI images](klight-ui/tests/screenshots/world3-remote/03-alice-running-remote.png)
 
 ---
 

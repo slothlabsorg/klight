@@ -1,57 +1,135 @@
 /**
- * World 3 — Team with remote cluster (EKS / GKE / bare metal).
+ * World 3 — Remote cluster (EKS/GKE or simulated with second minikube profile).
  *
- * Prerequisites:
- *   # DevOps runs once on the remote cluster:
+ * To simulate locally (no cloud needed):
+ *   minikube start --profile klight-remote-sim --driver=docker --cpus=2 --memory=3072 --kubernetes-version=v1.30.0
+ *   kubectl config use-context klight-remote-sim
  *   klight cluster setup-remote
- *
- *   # Dev receives the token and connects:
- *   klight connect --url https://dev.company.k8s --token eyJ...
+ *   klight connect --url https://127.0.0.1:<port> --token <token> --name klight-remote
  *   klight use klight-remote
- *   KUBECONFIG=<remote-kubeconfig> uvicorn server:app --port 7700
+ *   klight sync https://raw.githubusercontent.com/slothlabsorg/klight-demo-infra/main/klight-team.yaml
+ *   klight up store --env alice
+ *   KUBECONFIG=/tmp/klight-demo-kubeconfig.yaml uvicorn server:app --port 7700
  *
  * Run:
  *   cd klight-ui && npm run screenshots:w3
  */
 
 import { test } from '@playwright/test';
-import { screenshotStep } from './helpers';
+import { screenshotStep, waitForServer } from './helpers';
 
 const W = 'world3-remote';
-const REMOTE_URL = process.env.KLIGHT_REMOTE_URL;
-const REMOTE_TOKEN = process.env.KLIGHT_REMOTE_TOKEN;
+const SERVER = process.env.KLIGHT_URL || 'http://localhost:7700';
 
-// Tests are placeholders until a remote cluster is configured
-
-test('01 — klight cluster setup-remote (placeholder)', async ({ page }) => {
-  test.skip(!REMOTE_URL || !REMOTE_TOKEN,
-    'Set KLIGHT_REMOTE_URL and KLIGHT_REMOTE_TOKEN to run World 3 tests');
-  // Steps:
-  // 1. DevOps: klight cluster setup-remote  (on the remote cluster)
-  // 2. Output shows: klight connect --url <url> --token <token>
-  await page.goto('/');
-  await screenshotStep(page, W, '01-setup-remote-done');
+test.beforeAll(async ({ browser }) => {
+  const page = await browser.newPage();
+  await waitForServer(page, SERVER, 10);
+  await page.close();
 });
 
-test('02 — klight connect (remote token)', async ({ page }) => {
-  test.skip(!REMOTE_URL || !REMOTE_TOKEN, 'KLIGHT_REMOTE_URL and KLIGHT_REMOTE_TOKEN required');
-  // klight connect --url $REMOTE_URL --token $REMOTE_TOKEN
-  // klight use klight-remote
+async function waitForEnvList(page: any) {
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('#env-list');
+      return el && !el.textContent?.includes('Loading');
+    },
+    { timeout: 15000 }
+  );
+}
+
+test('01 — Environments tab on remote cluster', async ({ page }) => {
   await page.goto('/');
-  await screenshotStep(page, W, '02-connected-to-remote');
+  await waitForEnvList(page);
+  await screenshotStep(page, W, '01-environments-tab-remote');
 });
 
-test('03 — klight up against remote cluster', async ({ page }) => {
-  test.skip(!REMOTE_URL || !REMOTE_TOKEN, 'KLIGHT_REMOTE_URL and KLIGHT_REMOTE_TOKEN required');
-  // klight up store --env alice  (runs against remote klight-remote context)
+test('02 — Cluster status bar (remote context)', async ({ page }) => {
   await page.goto('/');
-  await screenshotStep(page, W, '03-klight-up-remote');
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('#cb-name');
+      return el && el.textContent && !el.textContent.includes('—');
+    },
+    { timeout: 12000 }
+  ).catch(() => null);
+  await screenshotStep(page, W, '02-cluster-bar-remote');
 });
 
-test('04 — Multiple devs on same cluster (isolated namespaces)', async ({ page }) => {
-  test.skip(!REMOTE_URL || !REMOTE_TOKEN, 'KLIGHT_REMOTE_URL and KLIGHT_REMOTE_TOKEN required');
-  // env-alice and env-bob both running on same remote cluster
-  // Each dev only affects their own namespace
+test('03 — env-alice running on remote (CI images from ghcr.io)', async ({ page }) => {
   await page.goto('/');
-  await screenshotStep(page, W, '04-isolated-envs-remote');
+  await waitForEnvList(page);
+  const envLink = page.locator('#env-list').getByText('alice');
+  const visible = await envLink.isVisible().catch(() => false);
+  if (!visible) {
+    test.skip(true, 'env-alice not found — run: klight up store --env alice');
+    return;
+  }
+  await envLink.click();
+  await page.waitForFunction(
+    () => document.getElementById('services-panel')?.querySelectorAll('[onclick^="showLogs"]').length ?? 0 > 0,
+    { timeout: 15000 }
+  );
+  await page.waitForTimeout(600);
+  await screenshotStep(page, W, '03-alice-running-remote');
+});
+
+test('04 — Service detail: store-api (remote)', async ({ page }) => {
+  await page.goto('/');
+  await waitForEnvList(page);
+  const envLink = page.locator('#env-list').getByText('alice');
+  const visible = await envLink.isVisible().catch(() => false);
+  if (!visible) {
+    test.skip(true, 'env-alice not found');
+    return;
+  }
+  await envLink.click();
+  await page.waitForFunction(
+    () => document.getElementById('services-panel')?.querySelectorAll('[onclick^="showLogs"]').length ?? 0 > 0,
+    { timeout: 15000 }
+  );
+  const card = page.locator('[onclick*="store-api"]').first();
+  const cardVisible = await card.isVisible().catch(() => false);
+  if (!cardVisible) {
+    test.skip(true, 'store-api card not visible');
+    return;
+  }
+  await card.click();
+  await page.waitForTimeout(600);
+  await screenshotStep(page, W, '04-service-detail-store-api');
+});
+
+test('05 — Logs: store-api on remote cluster', async ({ page }) => {
+  await page.goto('/');
+  await waitForEnvList(page);
+  const envLink = page.locator('#env-list').getByText('alice');
+  const visible = await envLink.isVisible().catch(() => false);
+  if (!visible) {
+    test.skip(true, 'env-alice not found');
+    return;
+  }
+  await envLink.click();
+  await page.waitForFunction(
+    () => document.getElementById('services-panel')?.querySelectorAll('[onclick^="showLogs"]').length ?? 0 > 0,
+    { timeout: 15000 }
+  );
+  const card = page.locator('[onclick*="store-api"]').first();
+  const cardVisible = await card.isVisible().catch(() => false);
+  if (!cardVisible) {
+    test.skip(true, 'store-api card not visible');
+    return;
+  }
+  await card.click();
+  const logsBtn = page.locator('button', { hasText: /[Ll]og/ });
+  const logsBtnVisible = await logsBtn.first().isVisible().catch(() => false);
+  if (logsBtnVisible) {
+    await logsBtn.first().click();
+    await page.waitForTimeout(1500);
+  }
+  await screenshotStep(page, W, '05-logs-store-api-remote');
+});
+
+test('06 — Env list on remote cluster', async ({ page }) => {
+  await page.goto('/');
+  await waitForEnvList(page);
+  await screenshotStep(page, W, '06-env-list-remote-cluster');
 });

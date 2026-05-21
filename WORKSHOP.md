@@ -116,30 +116,43 @@ Loading inventory-api:local into minikube (klight-demo)...
 
 **[STEP 3 — Bring up the stack — 60 seconds]**
 
-> **[SAY]** "Now — one command to bring up the entire stack."
+> **[SAY]** "Now — one command to bring up the entire stack. I give klight the paths to my three repos and it figures out everything else."
 >
-> **[DO]** Click `+ New environment` in the UI sidebar.
->
-> **[SHOW]** The form appears. Type `dev` for env name, select `store` profile.
->
-> **[SAY]** "The UI is showing me a sizing estimate right now. Profile 'store' needs about 2.8 GB. My cluster has 3 GB — it fits."
->
-> **[SHOW]** Green banner: `Profile 'store': ~2.8 GB estimated  ✓ Fits`
->
-> **[SAY]** "If it didn't fit, I'd get a warning with a one-click resize button. For now, let me run this in the terminal."
->
-> **[DO]** `KUBECONFIG=/tmp/klight-demo-kubeconfig.yaml klight up store --env dev`
+> **[DO]** `KUBECONFIG=/tmp/klight-demo-kubeconfig.yaml klight from-repos ./klight-demo-inventory-api ./klight-demo-store-api ./klight-demo-store-web --env dev`
 
 ```
-Profile: store → dev
+✓ Loaded klight-demo-inventory-api/klight.yaml → inventory-api:8081
+✓ Loaded klight-demo-store-api/klight.yaml → store-api:8080
+✓ Loaded klight-demo-store-web/klight.yaml → store-web:3000
 
-  Deploying infra/postgres...    ✓ infra/postgres
-  Deploying infra/kafka...       ✓ infra/kafka
-  Deploying inventory-api (inventory-api:local)...  ✓ inventory-api
-  Deploying store-api (store-api:local)...          ✓ store-api
-  Deploying store-web (store-web:local)...          ✓ store-web
+Infra needed: kafka, postgres
+✓ Created namespace env-dev
 
-Profile 'store' ready in 'dev'
+  Deploying kafka...        kafka created
+  Deploying postgres...     postgres created
+
+  Waiting for infra pods...
+  pod/kafka-0 condition met
+  pod/postgres-0 condition met
+
+Deploying inventory-api...
+  Migration complete
+
+Deploying store-api...
+  Migration complete
+
+Deploying store-web...
+
+Waiting for all services to be ready...
+
+All services ready in 'dev'!
+┌───────────────┬──────┬─────────┬──────────────────────────────────────┐
+│ Service       │ Port │ Health  │ Access                               │
+├───────────────┼──────┼─────────┼──────────────────────────────────────┤
+│ inventory-api │ 8081 │ /health │ klight open inventory-api --env dev  │
+│ store-api     │ 8080 │ /health │ klight open store-api --env dev      │
+│ store-web     │ 3000 │ /       │ klight open store-web --env dev      │
+└───────────────┴──────┴─────────┴──────────────────────────────────────┘
 ```
 
 > **[SAY]** "klight started postgres and kafka first, waited for them to be healthy, ran the database migrations, then started the services in the right order. You didn't write a single line of orchestration code."
