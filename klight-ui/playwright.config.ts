@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests',
-  outputDir: './tests/screenshots',
+  outputDir: './tests/report/artifacts',
   use: {
     baseURL: process.env.KLIGHT_URL || 'http://localhost:7700',
     screenshot: 'on',
@@ -11,5 +11,5 @@ export default defineConfig({
   },
   // Single worker — we're taking screenshots, not running in parallel
   workers: 1,
-  reporter: [['list'], ['html', { outputFolder: 'tests/report', open: 'never' }]],
+  reporter: [['list'], ['html', { outputFolder: 'tests/report/html', open: 'never' }]],
 });
