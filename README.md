@@ -1,6 +1,8 @@
-# klight
+# ![klight logo](klight-ui/static/images/klight-logo.png) klight
 
 > Run your full microservices stack locally — or on a shared cloud cluster — with two commands.
+
+![klight UI](klight-ui/static/images/klight-landing.png)
 
 klight gives every developer an isolated, full-stack environment without knowing Kubernetes exists. One command brings up databases, message brokers, and all your services in the right order. Another tears everything down.
 

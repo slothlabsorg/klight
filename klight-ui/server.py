@@ -14,9 +14,12 @@ import json, subprocess, os, urllib.request, base64, time
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 app = FastAPI(title="klight UI", docs_url=None, redoc_url=None)
+STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 MANIFESTS_DIR = os.environ.get("KLIGHT_MANIFESTS_DIR",
     str(Path(__file__).parent.parent / "manifests"))
 
@@ -469,37 +472,39 @@ HTML = """<!DOCTYPE html>
 <title>klight</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
-  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
+  body { font-family: system-ui, sans-serif; background: #050d1f; color: #e2e8f0; }
   .dot-g { width:10px;height:10px;border-radius:50%;background:#22c55e;display:inline-block }
   .dot-r { width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block }
   .dot-y { width:10px;height:10px;border-radius:50%;background:#eab308;display:inline-block }
   pre { white-space:pre-wrap; word-break:break-all; font-size:12px; }
-  input,select,textarea { background:#1e293b; border:1px solid #334155; border-radius:6px; padding:6px 10px; color:#e2e8f0; width:100%; }
-  input:focus,select:focus,textarea:focus { outline:none; border-color:#3b82f6; }
+  input,select,textarea { background:#0d1b3e; border:1px solid #1a3060; border-radius:6px; padding:6px 10px; color:#e2e8f0; width:100%; }
+  input:focus,select:focus,textarea:focus { outline:none; border-color:#B4FF3C; }
 </style>
 </head>
 <body class="min-h-screen">
-<header class="bg-slate-900 border-b border-slate-700 px-6 py-3 flex items-center gap-4">
-  <span class="text-blue-400 font-bold text-xl">⚡ klight</span>
+<header style="background:#050d1f;border-bottom:1px solid #1a3060" class="px-6 py-3 flex items-center gap-4">
+  <img src="/static/images/klight-logo.png" class="h-8 w-8 rounded" alt="klight">
+  <span class="font-bold text-xl" style="color:#B4FF3C">klight</span>
   <div class="ml-auto flex gap-2">
-    <button onclick="tab('envs')" id="tb-envs" class="px-3 py-1 rounded text-sm bg-blue-600 text-white">Environments</button>
+    <button onclick="tab('envs')" id="tb-envs" class="px-3 py-1 rounded text-sm" style="background:#B4FF3C;color:#050d1f">Environments</button>
     <button onclick="tab('setup')" id="tb-setup" class="px-3 py-1 rounded text-sm text-slate-300 hover:bg-slate-700">Setup Wizard</button>
+    <button onclick="tab('about')" id="tb-about" class="px-3 py-1 rounded text-sm text-slate-300 hover:bg-slate-700">About</button>
   </div>
 </header>
 
 <!-- Cluster status bar (always visible) -->
-<div id="cluster-bar" class="bg-slate-800 border-b border-slate-700 px-6 py-2 flex items-center gap-3 text-xs text-slate-400">
+<div id="cluster-bar" style="background:#0d1b3e;border-bottom:1px solid #1a3060" class="px-6 py-2 flex items-center gap-3 text-xs text-slate-400">
   <span>Cluster:</span>
   <span id="cb-name" class="text-slate-200 font-mono font-medium">—</span>
   <span id="cb-res" class="text-slate-400" data-mem-mb="0">—</span>
   <span id="cb-dot" class="dot-y"></span>
   <span id="cb-status">Loading...</span>
-  <button onclick="openResizeDialog()" class="ml-auto border border-slate-600 rounded px-2 py-1 hover:bg-slate-700 text-slate-300">Resize cluster</button>
+  <button onclick="openResizeDialog()" style="border:1px solid #1a3060" class="ml-auto rounded px-2 py-1 hover:bg-slate-700 text-slate-300">Resize cluster</button>
 </div>
 
 <!-- Resize modal -->
 <div id="resize-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-  <div class="bg-slate-800 rounded-lg p-6 w-80 border border-slate-600 shadow-xl">
+  <div style="background:#0d1b3e;border:1px solid #1a3060" class="rounded-lg p-6 w-80 shadow-xl">
     <h3 class="font-semibold mb-4 text-white">Resize Cluster</h3>
     <div class="mb-3">
       <label class="text-xs text-slate-400 block mb-1">Memory (MB)</label>
@@ -510,7 +515,7 @@ HTML = """<!DOCTYPE html>
       <input type="number" id="resize-cpus" value="2" min="1" max="8">
     </div>
     <div class="flex gap-2">
-      <button onclick="doResize()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white rounded px-3 py-2 text-sm">Resize</button>
+      <button onclick="doResize()" class="flex-1 rounded px-3 py-2 text-sm font-semibold" style="background:#B4FF3C;color:#050d1f">Resize</button>
       <button onclick="document.getElementById('resize-modal').classList.add('hidden')" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white rounded px-3 py-2 text-sm">Cancel</button>
     </div>
     <div id="resize-status" class="mt-3 text-sm"></div>
@@ -520,12 +525,12 @@ HTML = """<!DOCTYPE html>
 <div class="flex flex-1" style="min-height:calc(100vh - 92px)">
 
 <!-- sidebar -->
-<aside class="w-56 bg-slate-900 border-r border-slate-700 p-3 overflow-y-auto" id="sidebar">
+<aside style="background:#050d1f;border-right:1px solid #1a3060" class="w-56 p-3 overflow-y-auto" id="sidebar">
   <div class="text-xs text-slate-500 mb-2 uppercase tracking-wider">Environments</div>
   <div id="env-list"><div class="text-slate-500 text-xs">Loading...</div></div>
-  <button onclick="toggleNewEnvForm()" class="mt-3 w-full text-xs text-blue-400 border border-blue-800 rounded px-2 py-1 hover:bg-blue-900">+ New environment</button>
+  <button onclick="toggleNewEnvForm()" class="mt-3 w-full text-xs rounded px-2 py-1 hover:opacity-80 font-semibold" style="color:#B4FF3C;border:1px solid #B4FF3C;background:transparent">+ New environment</button>
   <!-- New env form -->
-  <div id="new-env-form" class="hidden mt-2 border border-slate-700 rounded p-3 text-xs">
+  <div id="new-env-form" class="hidden mt-2 rounded p-3 text-xs" style="border:1px solid #1a3060">
     <div class="mb-2">
       <label class="text-slate-400 block mb-1">Env name</label>
       <input type="text" id="new-env-name" placeholder="alice" oninput="updateEnvCmd()">
@@ -549,10 +554,13 @@ HTML = """<!DOCTYPE html>
 <!-- ENVIRONMENTS TAB -->
 <div id="tab-envs" class="flex-1 flex flex-col overflow-hidden">
   <div class="flex-1 overflow-y-auto p-5" id="services-panel">
-    <p class="text-slate-500 text-sm">Select an environment →</p>
+    <div class="flex flex-col items-center justify-center h-full text-center py-12">
+      <img src="/static/images/klight-sloth4.png" class="w-48 mb-6 opacity-80" alt="klight sloth">
+      <p class="text-slate-400 text-sm">Select an environment from the sidebar →</p>
+    </div>
   </div>
-  <div id="logs-panel" class="hidden border-t border-slate-700 bg-slate-950 h-60 flex flex-col">
-    <div class="flex items-center px-4 py-2 border-b border-slate-700">
+  <div id="logs-panel" class="hidden h-60 flex flex-col" style="border-top:1px solid #1a3060;background:#020810">
+    <div class="flex items-center px-4 py-2" style="border-bottom:1px solid #1a3060">
       <span class="text-xs text-slate-400" id="logs-title">Logs</span>
       <button onclick="document.getElementById('logs-panel').classList.add('hidden')" class="ml-auto text-slate-500 hover:text-white text-xs">✕</button>
     </div>
@@ -567,8 +575,8 @@ HTML = """<!DOCTYPE html>
     <p class="text-slate-400 text-sm mb-6">Connect your Git platform, scan repos, generate klight.yaml files, and create klight-team.yaml — without cloning any repos.</p>
 
     <!-- Step 1: Platform + Token -->
-    <div class="bg-slate-800 rounded-lg p-5 mb-4" id="step1">
-      <h3 class="font-semibold mb-3 text-blue-300">Step 1 — Platform & Access</h3>
+    <div class="rounded-lg p-5 mb-4" style="background:#0d1b3e" id="step1">
+      <h3 class="font-semibold mb-3" style="color:#B4FF3C">Step 1 — Platform &amp; Access</h3>
       <div class="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label class="text-xs text-slate-400 block mb-1">Platform</label>
@@ -592,39 +600,68 @@ HTML = """<!DOCTYPE html>
         <input type="text" id="s-registry" placeholder="ghcr.io/mycompany  or  123.dkr.ecr.us-east-1.amazonaws.com/co  or  registry.gitlab.com/mycompany">
         <p class="text-xs text-slate-500 mt-1">klight will set image: {registry}/{service}:main for each service</p>
       </div>
-      <button onclick="scanRepos()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm">Scan repos →</button>
+      <button onclick="scanRepos()" class="px-4 py-2 rounded text-sm font-semibold" style="background:#B4FF3C;color:#050d1f">Scan repos →</button>
       <div id="scan-status" class="mt-2 text-sm text-slate-400"></div>
     </div>
 
     <!-- Step 2: Repo selection -->
-    <div class="bg-slate-800 rounded-lg p-5 mb-4 hidden" id="step2">
-      <h3 class="font-semibold mb-3 text-blue-300">Step 2 — Select service repos</h3>
+    <div class="rounded-lg p-5 mb-4 hidden" style="background:#0d1b3e" id="step2">
+      <h3 class="font-semibold mb-3" style="color:#B4FF3C">Step 2 — Select service repos</h3>
       <div id="repo-list" class="space-y-2 mb-4 max-h-80 overflow-y-auto"></div>
       <div class="mb-3">
         <label class="text-xs text-slate-400 block mb-1">Infra / K8s repo (optional)</label>
         <input type="text" id="s-infra-repo" placeholder="company-infra (repo with existing K8s manifests)">
       </div>
-      <button onclick="generateYamls()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm">Generate klight.yaml files →</button>
+      <button onclick="generateYamls()" class="px-4 py-2 rounded text-sm font-semibold" style="background:#B4FF3C;color:#050d1f">Generate klight.yaml files →</button>
     </div>
 
     <!-- Step 3: Review klight.yaml -->
-    <div class="bg-slate-800 rounded-lg p-5 mb-4 hidden" id="step3">
-      <h3 class="font-semibold mb-3 text-blue-300">Step 3 — Review & confirm klight.yaml</h3>
+    <div class="rounded-lg p-5 mb-4 hidden" style="background:#0d1b3e" id="step3">
+      <h3 class="font-semibold mb-3" style="color:#B4FF3C">Step 3 — Review &amp; confirm klight.yaml</h3>
       <div id="yaml-review" class="space-y-4"></div>
-      <button onclick="generateTeam()" class="mt-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm">Generate klight-team.yaml →</button>
+      <button onclick="generateTeam()" class="mt-4 px-4 py-2 rounded text-sm font-semibold" style="background:#B4FF3C;color:#050d1f">Generate klight-team.yaml →</button>
     </div>
 
     <!-- Step 4: klight-team.yaml + distribute -->
-    <div class="bg-slate-800 rounded-lg p-5 mb-4 hidden" id="step4">
-      <h3 class="font-semibold mb-3 text-blue-300">Step 4 — Distribute</h3>
+    <div class="rounded-lg p-5 mb-4 hidden" style="background:#0d1b3e" id="step4">
+      <h3 class="font-semibold mb-3" style="color:#B4FF3C">Step 4 — Distribute</h3>
       <div id="team-yaml-preview" class="mb-4"></div>
       <button onclick="createPRs()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm mr-2">Open PRs →</button>
       <button onclick="downloadFiles()" class="bg-slate-600 hover:bg-slate-700 text-white px-4 py-2 rounded text-sm">Download files</button>
       <div id="pr-results" class="mt-4 space-y-2"></div>
-      <div id="sync-cmd" class="hidden mt-5 bg-slate-900 rounded p-4">
+      <div id="sync-cmd" class="hidden mt-5 rounded p-4" style="background:#050d1f">
         <p class="text-xs text-slate-400 mb-2">Share this with your team:</p>
         <pre id="sync-cmd-text" class="text-green-400"></pre>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ABOUT TAB -->
+<div id="tab-about" class="hidden flex-1 overflow-y-auto">
+  <div class="max-w-3xl mx-auto px-6 py-12">
+    <!-- Hero -->
+    <div class="flex flex-col items-center text-center mb-12">
+      <img src="/static/images/klight-sloth.png" class="w-64 mb-8 rounded-2xl shadow-2xl" alt="klight mascot">
+      <h1 class="text-3xl font-bold mb-4" style="color:#B4FF3C">klight — K8s environments for your whole team</h1>
+      <p class="text-lg mb-8" style="color:#8BA3C7">Built by SlothLabs. klight gives every developer a fully isolated Kubernetes environment in minutes — no infra knowledge required.</p>
+      <div class="flex gap-4 justify-center flex-wrap">
+        <a href="https://slothlabs.org/klight" target="_blank"
+           class="px-6 py-3 rounded-lg font-semibold text-base no-underline"
+           style="background:#B4FF3C;color:#050d1f">Product Page</a>
+        <a href="https://github.com/slothlabsorg/kraken-light" target="_blank"
+           class="px-6 py-3 rounded-lg font-semibold text-base no-underline"
+           style="border:2px solid #B4FF3C;color:#B4FF3C;background:transparent">GitHub</a>
+      </div>
+    </div>
+    <!-- Product screenshot -->
+    <div class="rounded-2xl overflow-hidden shadow-2xl" style="border:1px solid #1a3060">
+      <div class="px-4 py-2 text-xs font-mono" style="background:#0d1b3e;color:#8BA3C7;border-bottom:1px solid #1a3060">klight ui — http://localhost:7700</div>
+      <img src="/static/images/klight-landing.png" class="w-full block" alt="klight UI screenshot">
+    </div>
+    <!-- Tagline footer -->
+    <div class="mt-10 text-center text-sm" style="color:#8BA3C7">
+      Made with care by <span style="color:#B4FF3C">SlothLabs</span> · <a href="https://github.com/slothlabsorg/kraken-light" target="_blank" style="color:#B4FF3C" class="hover:underline">Open source on GitHub</a>
     </div>
   </div>
 </div>
@@ -644,12 +681,18 @@ const _infraRepo = () => document.getElementById('s-infra-repo').value;
 
 // Tab switching
 function tab(name) {
-  ['envs','setup'].forEach(t => {
+  ['envs','setup','about'].forEach(t => {
     document.getElementById('tab-' + t).classList.toggle('hidden', t !== name);
     const btn = document.getElementById('tb-' + t);
-    btn.className = t === name
-      ? 'px-3 py-1 rounded text-sm bg-blue-600 text-white'
-      : 'px-3 py-1 rounded text-sm text-slate-300 hover:bg-slate-700';
+    if (t === name) {
+      btn.style.background = '#B4FF3C';
+      btn.style.color = '#050d1f';
+      btn.className = 'px-3 py-1 rounded text-sm font-semibold';
+    } else {
+      btn.style.background = '';
+      btn.style.color = '';
+      btn.className = 'px-3 py-1 rounded text-sm text-slate-300 hover:bg-slate-700';
+    }
   });
 }
 
@@ -682,7 +725,7 @@ async function loadServices(name) {
   const cards = svcs.map(s => {
     const dot = s.healthy ? 'dot-g' : (s.status.includes('Loop') ? 'dot-r' : 'dot-y');
     return `<div onclick="showLogs('${name}','${s.name}')"
-      class="bg-slate-800 border border-slate-700 rounded-lg p-4 cursor-pointer hover:border-blue-600">
+      class="rounded-lg p-4 cursor-pointer" style="background:#0d1b3e;border:1px solid #1a3060" onmouseover="this.style.borderColor='#B4FF3C'" onmouseout="this.style.borderColor='#1a3060'">
       <div class="flex items-center gap-2 mb-1">
         <span class="${dot}"></span>
         <span class="font-medium text-white">${s.name}</span>
