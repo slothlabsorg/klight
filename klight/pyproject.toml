@@ -20,3 +20,9 @@ klight = "klight.cli:app"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["klight*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: requires running infrastructure (minikube, deployed env)",
+]

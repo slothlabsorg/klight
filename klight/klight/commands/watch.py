@@ -73,6 +73,48 @@ def _restart_pod(service_name: str, namespace: str) -> bool:
     return result.returncode == 0
 
 
+def _is_local_target() -> bool:
+    import subprocess as sp
+    r = sp.run(["kubectl", "config", "current-context"], capture_output=True, text=True)
+    ctx = r.stdout.strip()
+    return ctx in ("klight-demo", "minikube") or "minikube" in ctx
+
+
+def _run_cycle(
+    cfg: KlightConfig,
+    repo_path: Path,
+    namespace: str,
+    minikube_profile: str,
+    label: str = "",
+) -> bool:
+    """Build → load → restart. Returns True on success."""
+    ts = time.strftime("%H:%M:%S")
+    tag = f"[{ts}]{f' [{label}]' if label else ''}"
+
+    console.print(f"{tag} Building {cfg.effective_image()}...")
+    t_start = time.time()
+
+    if not _build_image(cfg, repo_path):
+        console.print(f"{tag} [red]Build failed — will retry on next change[/red]")
+        return False
+
+    is_local = _is_local_target()
+    if is_local:
+        console.print(f"{tag} Loading into minikube ({minikube_profile})...")
+        if not _load_to_minikube(cfg.effective_image(), minikube_profile):
+            console.print(f"{tag} [red]minikube image load failed[/red]")
+            return False
+    else:
+        console.print(f"{tag} [dim]Remote cluster — skipping minikube load[/dim]")
+
+    console.print(f"{tag} Restarting {cfg.name} in {namespace}...")
+    _restart_pod(cfg.name, namespace)
+
+    elapsed = round(time.time() - t_start)
+    console.print(f"{tag} [green]✓ Done[/green] in {elapsed}s — {cfg.name} redeployed\n")
+    return True
+
+
 def _watch_loop(
     cfg: KlightConfig,
     repo_path: Path,
@@ -85,7 +127,6 @@ def _watch_loop(
     console.print(f"  [dim]Ctrl+C to stop[/dim]\n")
 
     last_mtimes = _get_mtimes(watch_paths)
-    last_build_time = time.strftime("%H:%M:%S")
 
     while not stop_event.is_set():
         time.sleep(2)
@@ -104,20 +145,7 @@ def _watch_loop(
 
         ts = time.strftime("%H:%M:%S")
         console.print(f"[{ts}] [yellow]Change detected:[/yellow] {changed_display}")
-        console.print(f"[{ts}] Building {cfg.effective_image()}...")
-
-        t_start = time.time()
-        if not _build_image(cfg, repo_path):
-            continue
-
-        console.print(f"[{ts}] Loading into minikube ({minikube_profile})...")
-        _load_to_minikube(cfg.effective_image(), minikube_profile)
-
-        console.print(f"[{ts}] Restarting {cfg.name} in {namespace}...")
-        _restart_pod(cfg.name, namespace)
-
-        elapsed = round(time.time() - t_start)
-        console.print(f"[{ts}] [green]✓ Done[/green] in {elapsed}s — {cfg.name} redeployed\n")
+        _run_cycle(cfg, repo_path, namespace, minikube_profile)
 
 
 @app.command()
@@ -126,13 +154,20 @@ def cmd(
     env_name: str = typer.Option(..., "--env", help="Environment name"),
     path: Path = typer.Option(None, "--path", help="Path to service repo (default: ./<service>)"),
     profile: str = typer.Option("klight-demo", "--profile", help="minikube profile name"),
+    initial_build: bool = typer.Option(
+        True,
+        "--initial-build/--no-initial-build",
+        help="Build and reload the service once on startup before watching.",
+    ),
 ) -> None:
     """
     Watch a service's source files and rebuild + restart the pod on every change.
     Does NOT touch your code — uses your existing Dockerfile or build command.
 
+    Builds once immediately on startup (use --no-initial-build to skip).
+
     Example:
-      klight watch billing-service --env alice --path ./billing-service
+      klight watch store-api --env alice --path ./store-api
     """
     repo_path = (path or Path(f"./{service}")).resolve()
     klf = repo_path / "klight.yaml"
@@ -154,6 +189,10 @@ def cmd(
     console.print(f"[bold]klight watch[/bold] — {cfg.name} → {ns}")
     console.print(f"  Image:    {cfg.effective_image()}")
     console.print(f"  Cluster:  {profile}")
+
+    if initial_build:
+        console.print(f"\n[bold]Initial build[/bold] (--no-initial-build to skip)...")
+        _run_cycle(cfg, repo_path, ns, profile)
 
     stop = threading.Event()
     thread = threading.Thread(

@@ -172,16 +172,17 @@ def logs(
 
 
 
-@app.command()
+@app.command(name="watch")
 def watch_cmd(
     service: str = typer.Argument(..., help="Service name"),
     env_name: str = typer.Option(..., "--env", help="Environment name"),
     path: Path = typer.Option(None, "--path", help="Path to service repo"),
     profile: str = typer.Option("klight-demo", "--profile"),
+    initial_build: bool = typer.Option(True, "--initial-build/--no-initial-build"),
 ) -> None:
     """Watch source files and rebuild + restart pod on every change (hot reload)."""
     from klight.commands.watch import cmd as watch_start
-    watch_start(service, env_name=env_name, path=path, profile=profile)
+    watch_start(service, env_name=env_name, path=path, profile=profile, initial_build=initial_build)
 
 
 @app.command()
