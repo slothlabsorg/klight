@@ -193,3 +193,62 @@ def status(
                 console.print(f"  {line}")
         else:
             console.print("  [dim]No klight images found. Run: klight local build-load <service> --path <dir>[/dim]")
+
+
+@app.command("preload-infra")
+def preload_infra(
+    profile: str = typer.Option(MINIKUBE_PROFILE, "--profile", help="minikube profile"),
+    only: str = typer.Option("", "--only", help="Comma-separated infra names to preload (default: all)"),
+) -> None:
+    """
+    Pull all catalog infra images from Docker Hub and load them into minikube.
+
+    Eliminates ImagePullBackOff on fresh clusters. Run once after klight local setup.
+
+    Example:
+      klight local preload-infra                         # all catalog images
+      klight local preload-infra --only postgres,redis   # subset
+    """
+    from klight.catalog import load as load_catalog
+    catalog = load_catalog()
+
+    if only:
+        names = [n.strip() for n in only.split(",") if n.strip()]
+        missing = [n for n in names if n not in catalog]
+        if missing:
+            console.print(f"[red]Unknown infra names:[/red] {', '.join(missing)}")
+            console.print(f"  Available: {', '.join(sorted(catalog.keys()))}")
+            raise typer.Exit(1)
+    else:
+        names = sorted(catalog.keys())
+
+    console.print(f"[bold]Preloading {len(names)} infra image(s) into {profile}[/bold]")
+    console.print(f"  [dim]First run may take several minutes. Images are cached locally.[/dim]\n")
+
+    ok, failed = 0, 0
+    for name in names:
+        image = catalog[name]["image"]
+        console.print(f"  [bold]{name}[/bold]  [dim]{image}[/dim]")
+
+        r_pull = subprocess.run(
+            ["docker", "pull", image],
+            capture_output=True, text=True,
+        )
+        if r_pull.returncode != 0:
+            snippet = (r_pull.stderr or r_pull.stdout or "").strip()[-120:]
+            console.print(f"    [red]✗ docker pull failed[/red]: {snippet}")
+            failed += 1
+            continue
+
+        r_load = _minikube(["image", "load", image, f"--profile={profile}"], capture=True)
+        if r_load.returncode != 0:
+            console.print(f"    [red]✗ minikube image load failed[/red]")
+            failed += 1
+            continue
+
+        console.print(f"    [green]✓[/green] loaded")
+        ok += 1
+
+    console.print(f"\n[bold]Done:[/bold] {ok} loaded, {failed} failed")
+    if failed > 0:
+        raise typer.Exit(1)
