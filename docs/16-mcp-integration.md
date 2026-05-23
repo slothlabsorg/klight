@@ -1,24 +1,23 @@
 # klight MCP Integration — Use klight with Claude and any LLM
 
-klight ships a built-in MCP (Model Context Protocol) server. Once configured,
-you can manage Kubernetes environments entirely through natural language — no
-CLI flags to remember, no YAML to write.
+klight ships a built-in MCP (Model Context Protocol) server. Add it to Claude
+once and manage K8s environments in plain English — every workflow, every world.
 
 ---
 
-## Setup — 2 minutes
+## Setup
 
-### Claude Code (recommended)
+### Claude Code (30 seconds)
 
 ```bash
 claude mcp add klight -- klight mcp
 ```
 
-That's it. Restart Claude Code and start talking to it.
+Restart Claude Code. Done.
 
 ### Claude Desktop
 
-Edit `~/.config/claude/claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`):
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -34,105 +33,157 @@ Edit `~/.config/claude/claude_desktop_config.json` (macOS: `~/Library/Applicatio
 }
 ```
 
-Restart Claude Desktop.
+Restart Claude Desktop. Done.
 
-### Any other MCP-compatible LLM
+### Any MCP-compatible client
 
 ```bash
-klight mcp   # starts a stdio MCP server — wire it to any MCP client
+klight mcp   # starts a stdio MCP server
 ```
 
 ---
 
-## What the LLM can do
+## What the LLM can do (17 tools)
 
-### Tools (actions)
+### World 1 — Local cluster
 
-| Tool | What you'd say |
-|------|----------------|
-| `deploy_environment` | "deploy the store profile to env alice" |
-| `deploy_from_repos` | "deploy ./inventory-api and ./store-api to env dev" |
-| `service_status` | "what's running in env tienda?" |
-| `get_logs` | "show me the last 50 lines from store-api in env alice" |
-| `destroy_environment` | "tear down env alice" |
-| `replace_service` | "replace store-api in env dev with my local build at ./store-api" |
-| `restore_service` | "restore store-api to the CI image" |
-| `get_unready` | "what's broken in env dev and how do I fix it?" |
-| `init_service` | "scan ./my-service and generate a klight.yaml for it" |
-| `sync_team` | "sync the team config from github.com/my-org/infra/klight-team.yaml" |
-| `switch_target` | "switch to the remote cluster" |
-| `run_preflight` | "check if all images are available before I deploy" |
+| Say this | Tool called |
+|----------|------------|
+| "set up a local cluster with 4 CPUs and 6GB RAM" | `local_setup(cpus=4, memory=6144)` |
+| "preload postgres and kafka into minikube" | `preload_infra(only="postgres,kafka")` |
+| "build and load inventory-api from ./inventory-api" | `local_build_load(service, repo_path)` |
+| "deploy ./inventory-api and ./store-api as env dev" | `deploy_from_repos(paths, env_name)` |
 
-### Resources (context — no tool call needed)
+### World 2 / World 3 — Team sync + remote
 
-| Resource | Gives Claude |
-|----------|-------------|
-| `klight://cluster` | Current target, CPUs, RAM, minikube status |
-| `klight://environments` | All active environments + pod status |
-| `klight://team-yaml` | Current synced klight-team.yaml contents |
+| Say this | Tool called |
+|----------|------------|
+| "sync the team config from github.com/org/infra/..." | `sync_team(url)` |
+| "deploy the store profile as env alice" | `deploy_environment(profile, env_name)` |
+| "set up our EKS cluster for klight" | `setup_remote_cluster()` |
+| "connect to our cluster at k8s.company.com with this token" | `connect_remote(url, token)` |
+| "switch to the remote cluster" | `switch_target("remote")` |
 
-Claude reads these automatically before answering questions like "what
-environments do I have?" — no explicit command needed.
+### Observe & operate
+
+| Say this | Tool called |
+|----------|------------|
+| "what's running in env alice?" | `service_status(env_name)` |
+| "show last 50 lines from store-api in env dev" | `get_logs(service, env_name, tail=50)` |
+| "what's broken in env alice and how do I fix it?" | `get_unready(env_name)` |
+| "replace store-api in env dev with my local build" | `replace_service(service, env_name, path)` |
+| "restore store-api to CI image" | `restore_service(service, env_name)` |
+| "destroy env alice" | `destroy_environment(env_name)` |
+| "scan ./billing-service and generate klight.yaml" | `init_service(repo_path)` |
+
+### Resources (Claude reads automatically, no tool call needed)
+
+| Resource | Content |
+|----------|---------|
+| `klight://cluster` | Active target, CPUs/RAM, minikube status |
+| `klight://environments` | All active envs + pod status |
+| `klight://team-yaml` | Current cached klight-team.yaml |
+| `klight://capabilities` | Full map of MCP tools, CLI-only, and UI features |
+
+---
+
+## What requires the CLI
+
+These commands are interactive or stream output — the LLM will give you the
+exact command to run in a terminal:
+
+```bash
+klight watch <service> --env <name> --path <dir>   # hot reload on file save
+klight exec  <service> --env <name>                # shell into a pod
+klight open  <service> --env <name>                # port-forward + browser
+klight logs  <service> --env <name> -f             # stream logs live
+```
+
+## What works better in the UI
+
+Run `klight ui` (opens http://localhost:7700) for:
+
+- **Live streaming logs** — auto-refresh per service
+- **Cluster resize** — visual dialog with sizing estimate
+- **Setup Wizard** — scan GitHub org → generate klight.yaml files → generate klight-team.yaml
 
 ---
 
 ## Example conversations
 
-**Developer (World 1 — local repos):**
-```
-You: deploy ./inventory-api, ./store-api, and ./store-web to an env called dev
-Claude: [calls deploy_from_repos] ✓ Deployed 3 services to env-dev.
-        inventory-api: Running (1/1)
-        store-api: Running (1/1)
-        store-web: Running (1/1)
+### Developer (World 1)
 
-You: store-api is crashing, show me the logs
-Claude: [calls get_logs] Here are the last 100 lines from store-api...
-        "Connection refused to postgres:5432"
-        
-You: what's wrong and how do I fix it?
-Claude: [calls get_unready] store-api is waiting on postgres.
-        The sentinel should have blocked it — try: klight replace store-api ...
+```
+You: I have ./inventory-api and ./store-api cloned, set everything up for me locally
+
+Claude: I'll walk you through World 1. First, let me check your cluster…
+  [reads klight://cluster — no cluster found]
+  → calling local_setup(cpus=4, memory=4096)
+  ✓ Cluster klight-demo started
+
+  Now preloading infra images to avoid ImagePullBackOff…
+  → calling preload_infra()
+  ✓ postgres, redis pulled and loaded
+
+  Building your services…
+  → calling local_build_load("inventory-api", "./inventory-api")
+  → calling local_build_load("store-api", "./store-api")
+  ✓ Both images loaded into minikube
+
+  Deploying to env dev…
+  → calling deploy_from_repos(["./inventory-api", "./store-api"], "dev")
+  ✓ inventory-api  Running (1/1)
+  ✓ store-api      Running (1/1)
+  All ready in 38s. Visit http://localhost:8081 after: klight open inventory-api --env dev
 ```
 
-**Developer (World 2 — team sync):**
+### DevOps (World 3 setup)
+
 ```
-You: sync the team config and deploy the store profile for me as env alice
-Claude: [calls sync_team, then deploy_environment]
-        ✓ Synced klight-team.yaml (4 services, 2 profiles)
-        ✓ Deploying store profile to env-alice...
-        All pods ready in 45s.
+You: set up our staging cluster for klight and give me the token for the team
+
+Claude: [reads klight://cluster — context is staging-eks]
+  → calling setup_remote_cluster()
+  ✓ Namespace klight-system created
+  ✓ ServiceAccount klight-dev created
+  ✓ ClusterRole klight-dev (env-* namespaces)
+  Token (valid 1 year): eyJhbGci...
+
+  Share this with your devs:
+    klight connect --url https://staging.company.k8s --token eyJhbGci...
+  Or ask me to call connect_remote for them.
 ```
 
-**DevOps:**
+### Team lead (daily ops)
+
 ```
-You: scan our new billing-service repo at ./billing-service and generate klight.yaml
-Claude: [calls init_service] Detected: FastAPI on port 8082, needs postgres.
-        Generated klight.yaml:
-        name: billing-service
-        port: 8082
-        needs: [postgres]
-        health: /health
-        
-You: looks good, now help me add it to our klight-team.yaml
-Claude: Here's the updated team.yaml with billing-service added to the
-        store profile...
+You: what's the state of all environments right now?
+
+Claude: [reads klight://environments automatically]
+  3 active environments:
+  env-alice  store profile  3/3 Running ✓
+  env-bob    store profile  2/3 Running  ← store-web Pending
+  env-dev    store profile  3/3 Running ✓
+
+  env-bob has a problem. Want me to check what's wrong?
+
+You: yes
+
+Claude: → calling get_unready("bob")
+  store-web: Pending — ImagePullBackOff
+  ghcr.io/slothlabsorg/store-web:main not found in registry
+  Fix: push a new build to ghcr.io, or use replace_service to load a local build
 ```
 
 ---
 
-## Verify the server works
+## Verify installation
 
 ```bash
-# Install/update klight with MCP support
-cd kraken-light/klight && pip install -e .
+# Check tools load correctly
+python3 -c "from klight.mcp_server import mcp; print([t.name for t in mcp._tool_manager.list_tools()])"
 
-# Test the server starts
-klight mcp --help
-
-# Inspect all tools via browser UI (no Claude needed)
+# Inspect interactively (browser UI, no Claude needed)
 npx @modelcontextprotocol/inspector klight mcp
+# Opens http://localhost:5173 — call tools, inspect resources
 ```
-
-The inspector opens at `http://localhost:5173` where you can call tools
-interactively and inspect the resources.
