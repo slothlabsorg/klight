@@ -2,6 +2,64 @@
 
 This guide covers how a small DevOps team sets up klight for multiple development verticals, so new developers get a full stack with one command.
 
+## Setup Wizard — quickest path for a new team
+
+The fastest way for DevOps to set up klight for an org is the Setup Wizard in `klight ui`:
+
+1. Enter GitHub org + token + Docker registry prefix
+2. Wizard scans all repos for `klight.yaml`, `Dockerfile`, and `deploy/` folders
+3. For repos that already have `klight.yaml`, it reads the `needs:` list and flags any entry
+   that isn't in the built-in catalog:
+
+```
+⚠ Custom infra detected
+• inventory-api needs: postgres-inventory — not in built-in catalog
+• store-api     needs: postgres-store     — not in built-in catalog
+
+Built-in: postgres · kafka · redis · mongodb · rabbitmq · localstack · elasticsearch
+→ Add these to klight-catalog.yaml in your infra repo (see below)
+```
+
+4. DevOps reviews and edits the generated `klight.yaml` files in-browser
+5. Wizard generates `klight-team.yaml` and offers to open PRs or download files
+6. DevOps commits both to the infra repo; devs sync with one URL
+
+### What to do when the wizard flags a custom infra entry
+
+The wizard tells you which `needs:` entries aren't in the built-in catalog. For each one you
+have two options:
+
+**Option A — rename to a built-in** (simplest, works if one instance per env is enough):
+```yaml
+# Change needs: [postgres-store] → needs: [postgres]
+# Then update env var in klight.yaml:
+env:
+  DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/store_db"
+```
+
+**Option B — add a custom catalog entry** (needed for multiple postgres instances, custom credentials, or non-standard images):
+```yaml
+# klight-catalog.yaml in your infra repo
+infra:
+  postgres-store:
+    description: "PostgreSQL 15 for store-api"
+    image: postgres:15-alpine
+    port: 5432
+    manifest: infrastructure/postgres-store/base   # path under KLIGHT_MANIFESTS_DIR
+    provides:
+      GLOBAL_POSTGRES_STORE_HOST: postgres-store
+      GLOBAL_POSTGRES_STORE_PORT: "5432"
+```
+
+Then add the manifest files (StatefulSet + Service + kustomization.yaml) under
+`manifests/infrastructure/postgres-store/base/` in your infra repo.
+
+`KLIGHT_MANIFESTS_DIR` must point at your infra repo's `manifests/` directory when running
+`klight from-repos` or `klight ui`:
+```bash
+KLIGHT_MANIFESTS_DIR=./manifests klight from-repos ./services/* --env dev
+```
+
 ## The model
 
 ```

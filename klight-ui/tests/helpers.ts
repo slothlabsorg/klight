@@ -17,8 +17,9 @@ export async function screenshotStep(
   page: Page,
   world: string,
   step: string,
+  opts: { fullPage?: boolean } = {},
 ): Promise<void> {
   const dir = path.join(__dirname, 'screenshots', world);
   fs.mkdirSync(dir, { recursive: true });
-  await page.screenshot({ path: path.join(dir, `${step}.png`), fullPage: false });
+  await page.screenshot({ path: path.join(dir, `${step}.png`), fullPage: opts.fullPage ?? false });
 }

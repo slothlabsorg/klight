@@ -10,7 +10,7 @@ Tabs:
 """
 
 from __future__ import annotations
-import json, subprocess, os, urllib.request, base64, time
+import json, subprocess, os, urllib.request, base64, time, yaml
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -20,6 +20,11 @@ from pydantic import BaseModel
 app = FastAPI(title="klight UI", docs_url=None, redoc_url=None)
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+BUILT_IN_CATALOG = {
+    "postgres", "kafka", "redis", "mongodb",
+    "rabbitmq", "localstack", "elasticsearch",
+}
 MANIFESTS_DIR = os.environ.get("KLIGHT_MANIFESTS_DIR",
     str(Path(__file__).parent.parent / "manifests"))
 
@@ -185,12 +190,22 @@ def scan_repos(req: ScanRequest):
             raise HTTPException(400, "Could not list repos. Check token and org name.")
         for r in data:
             name = r["name"]
-            has_klight = bool(_get_file_content("github", req.token, req.org, name, "klight.yaml"))
+            klight_raw = _get_file_content("github", req.token, req.org, name, "klight.yaml")
+            has_klight = bool(klight_raw)
             has_dockerfile = bool(_get_file_content("github", req.token, req.org, name, "Dockerfile"))
             has_deploy = any([
                 _get_file_content("github", req.token, req.org, name, "deploy/base/kustomization.yaml"),
                 _get_file_content("github", req.token, req.org, name, "k8s/kustomization.yaml"),
             ])
+            unknown_needs: list[str] = []
+            if klight_raw:
+                try:
+                    kd = yaml.safe_load(klight_raw) or {}
+                    for n in (kd.get("needs") or []):
+                        if str(n) not in BUILT_IN_CATALOG:
+                            unknown_needs.append(str(n))
+                except Exception:
+                    pass
             repos.append({
                 "name": name,
                 "description": r.get("description", ""),
@@ -199,6 +214,7 @@ def scan_repos(req: ScanRequest):
                 "has_deploy_folder": has_deploy,
                 "url": r.get("html_url", ""),
                 "is_service": has_dockerfile or has_klight,
+                "unknown_needs": unknown_needs,
             })
     elif req.platform == "gitlab":
         data = _gl_api(req.token, f"/groups/{req.org}/projects?per_page=100")
@@ -224,9 +240,20 @@ def generate_klight_yamls(req: GenerateRequest):
     Uses registry prefix — doesn't need to know CI details.
     """
     results = []
+    catalog_warnings: list[dict] = []
     for repo_name in req.selected_repos:
         existing = _get_file_content(req.platform, req.token, req.org, repo_name, "klight.yaml")
         if existing:
+            unknown: list[str] = []
+            try:
+                kd = yaml.safe_load(existing) or {}
+                for n in (kd.get("needs") or []):
+                    if str(n) not in BUILT_IN_CATALOG:
+                        unknown.append(str(n))
+            except Exception:
+                pass
+            if unknown:
+                catalog_warnings.append({"repo": repo_name, "unknown_needs": unknown})
             results.append({"repo": repo_name, "status": "exists", "yaml": existing})
             continue
 
@@ -272,7 +299,7 @@ def generate_klight_yamls(req: GenerateRequest):
         yaml_content = "\n".join(yaml_lines) + "\n"
         results.append({"repo": repo_name, "status": "generated", "yaml": yaml_content})
 
-    return {"results": results}
+    return {"results": results, "catalog_warnings": catalog_warnings}
 
 
 @app.post("/api/setup/team-yaml")
@@ -791,10 +818,11 @@ async function scanRepos() {
     <label class="flex items-start gap-3 cursor-pointer hover:bg-slate-700 p-2 rounded">
       <input type="checkbox" class="repo-cb mt-1" value="${repo.name}" ${repo.has_dockerfile ? 'checked' : ''}>
       <div class="flex-1">
-        <div class="font-medium text-sm">${repo.name}
-          ${repo.has_klight ? '<span class="ml-2 text-xs text-green-400">✓ klight.yaml</span>' : '<span class="ml-2 text-xs text-yellow-400">⚠ missing klight.yaml</span>'}
-          ${repo.has_dockerfile ? '<span class="ml-1 text-xs text-slate-400">✓ Dockerfile</span>' : ''}
-          ${repo.has_deploy_folder ? '<span class="ml-1 text-xs text-blue-400">✓ deploy/</span>' : ''}
+        <div class="font-medium text-sm flex flex-wrap items-center gap-1">${repo.name}
+          ${repo.has_klight ? '<span class="text-xs text-green-400">✓ klight.yaml</span>' : '<span class="text-xs text-yellow-400">⚠ missing klight.yaml</span>'}
+          ${repo.has_dockerfile ? '<span class="text-xs text-slate-400">✓ Dockerfile</span>' : ''}
+          ${repo.has_deploy_folder ? '<span class="text-xs text-blue-400">✓ deploy/</span>' : ''}
+          ${(repo.unknown_needs||[]).map(n => `<span class="text-xs px-1.5 py-0.5 rounded" style="background:#7c2d1220;color:#fb923c;border:1px solid #c2410c40">⚠ custom: ${n}</span>`).join('')}
         </div>
         ${repo.description ? `<div class="text-xs text-slate-500">${repo.description.substring(0,80)}</div>` : ''}
       </div>
@@ -816,7 +844,29 @@ async function generateYamls() {
   }).then(r=>r.json());
 
   document.getElementById('step3').classList.remove('hidden');
-  document.getElementById('yaml-review').innerHTML = r.results.map(res => `
+
+  // Catalog warning panel
+  const warnings = r.catalog_warnings || [];
+  let warningHtml = '';
+  if (warnings.length) {
+    const items = warnings.map(w =>
+      `<li class="mt-1"><strong class="text-orange-300">${w.repo}</strong> needs: [${w.unknown_needs.join(', ')}] — not in built-in catalog</li>`
+    ).join('');
+    warningHtml = `
+    <div class="rounded-lg p-4 mb-4" style="background:#1a0f00;border:1px solid #c2410c60">
+      <div class="flex items-start gap-3">
+        <span class="text-orange-400 text-lg mt-0.5">⚠</span>
+        <div>
+          <p class="font-semibold text-orange-300 text-sm mb-1">Custom infra detected</p>
+          <p class="text-xs text-slate-400 mb-2">The following services declare <code>needs:</code> entries not in the built-in catalog. Add them to <code>klight-catalog.yaml</code> in your infra repo so klight knows how to start them.</p>
+          <ul class="text-xs text-slate-300 list-disc list-inside">${items}</ul>
+          <p class="text-xs text-slate-500 mt-2">Built-in: postgres · kafka · redis · mongodb · rabbitmq · localstack · elasticsearch<br>
+          See <a href="https://github.com/slothlabsorg/kraken-light/blob/main/docs/12-custom-catalog.md" target="_blank" class="text-orange-400 underline">docs/12-custom-catalog.md</a></p>
+        </div>
+      </div>
+    </div>`;
+  }
+  document.getElementById('yaml-review').innerHTML = warningHtml + r.results.map(res => `
     <div class="border border-slate-600 rounded p-3">
       <div class="flex items-center justify-between mb-2">
         <span class="font-medium text-sm">${res.repo}</span>
