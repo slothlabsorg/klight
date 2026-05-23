@@ -47,26 +47,23 @@ klight watch --all --env dev       # watch all locally-built services
 ```
 Files: `klight/klight/commands/watch.py` (scaffold exists, needs implementation)
 
-### PyPI publish — `pip install klight` from the public registry
-Currently only installable from source. Real adoption requires a published package.
-- Set up `pyproject.toml` properly, GitHub Action to publish on tag
-- Test install from PyPI in a clean venv
+### ~~PyPI publish~~ ✅ Done
+### ~~`klight preload-infra`~~ ✅ Done
+### ~~Context validation guard~~ ✅ Done
+### ~~klight.yaml JSON schema published to GitHub Pages~~ ✅ Done
 
-### `klight preload-infra` — pull + load all infra images into minikube
-Eliminates the ImagePullBackOff issue on fresh clusters.
-```bash
-klight local preload-infra         # pulls postgres, kafka, redis, etc. into minikube
+### Setup Wizard catalog detection
+When scanning repos, the Setup Wizard detects `needs:` entries that don't match any built-in
+or local catalog entry and tells DevOps exactly what to do:
 ```
-Files: `klight/klight/commands/local.py`
-
-### Context validation guard
-Warn (or refuse) if current kubectl context matches a production pattern.
-Currently: multiple SoFi contexts in ~/.kube/config co-exist with klight-demo.
-Files: `klight/klight/commands/_context.py` (new) — called from `up`, `from-repos`, `destroy`
-
-### klight.yaml JSON schema published to GitHub Pages
-`$schema=https://slothlabsorg.github.io/klight/schema/klight.yaml.json` — published via GitHub Pages.
-Schema lives in `schema/klight.yaml.json`; the `pages.yml` workflow deploys it on every push to main.
+⚠  Found needs: [postgres-store] in inventory-api/klight.yaml
+   postgres-store is not in the built-in catalog.
+   Options:
+     a) Rename to postgres — the built-in postgres entry handles a single shared instance.
+     b) Add postgres-store to klight-catalog.yaml with a manifest: path.
+   See docs/12-custom-catalog.md
+```
+This closes the gap between "DevOps writes klight.yaml" and "DevOps knows they need a custom catalog entry".
 
 ---
 
@@ -152,6 +149,16 @@ Useful for shared clusters where DevOps needs to justify cost.
 - Prometheus + Grafana deployed via `klight local setup --with-observability`
 - Per-environment Grafana dashboard provisioned on `klight up`
 - OpenTelemetry collector StatefulSet in klight-system namespace
+
+### Shared infra namespaces
+Teams with a dedicated infra namespace (one postgres for all dev envs in a shared cluster) can reference it without klight spinning up a copy:
+```yaml
+# klight-team.yaml
+shared_infra:
+  - name: postgres-store
+    namespace: infra-shared   # klight references this, doesn't create it
+```
+Until then: each environment gets its own catalog-managed infra copy (better isolation, simpler for startups).
 
 ---
 
