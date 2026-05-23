@@ -29,7 +29,7 @@ migration:
   command: ["python", "-m", "app.migrate"]
 ```
 
-VS Code autocomplete: add `# yaml-language-server: $schema=https://klight.dev/schema/klight.yaml.json` at the top.
+VS Code autocomplete: add `# yaml-language-server: $schema=https://slothlabsorg.github.io/klight/schema/klight.yaml.json` at the top.
 
 ## Infra Catalog
 

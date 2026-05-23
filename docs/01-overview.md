@@ -46,7 +46,7 @@ cluster/
 ## The klight.yaml (10–20 lines per service)
 
 ```yaml
-# yaml-language-server: $schema=https://klight.dev/schema/klight.yaml.json
+# yaml-language-server: $schema=https://slothlabsorg.github.io/klight/schema/klight.yaml.json
 name: inventory-api
 port: 8081
 needs: [postgres, kafka]   # klight starts these in the namespace

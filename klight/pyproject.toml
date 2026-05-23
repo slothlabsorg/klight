@@ -6,7 +6,25 @@ build-backend = "setuptools.build_meta"
 name = "klight"
 version = "0.1.0"
 description = "klight — Kubernetes environment manager for startups"
+authors = [{name = "SlothLabs", email = "hello@slothlabs.org"}]
+license = {text = "MIT"}
+readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["kubernetes", "devops", "k8s", "environments", "developer-tools"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Utilities",
+]
 dependencies = [
     "typer>=0.12",
     "rich>=13",
@@ -14,6 +32,16 @@ dependencies = [
     "kubernetes>=29",
     "mcp>=1.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[project.urls]
+Homepage = "https://slothlabs.org/klight"
+Repository = "https://github.com/slothlabsorg/kraken-light"
+Documentation = "https://github.com/slothlabsorg/kraken-light/tree/main/docs"
 
 [project.scripts]
 klight = "klight.cli:app"

@@ -26,7 +26,7 @@ Last updated: 2026-05-21
   - Setup Wizard tab (GitHub scan + klight-team.yaml generator)
 - Infrastructure catalog: postgres, kafka, redis, mongodb, rabbitmq, localstack, elasticsearch
 - Custom catalog via `klight-catalog.yaml`
-- klight.yaml JSON schema (`$schema=https://klight.dev/schema/klight.yaml.json`)
+- klight.yaml JSON schema (`$schema=https://slothlabsorg.github.io/klight/schema/klight.yaml.json`)
 - `manifest:` field — use existing K8s manifests instead of generating
 - Sentinel: `busybox:stable-uclibc`, TCP + HTTP health polling
 - Playwright test suite: world1-local, world2-sync, world3-remote (all passing)
@@ -64,9 +64,9 @@ Warn (or refuse) if current kubectl context matches a production pattern.
 Currently: multiple SoFi contexts in ~/.kube/config co-exist with klight-demo.
 Files: `klight/klight/commands/_context.py` (new) — called from `up`, `from-repos`, `destroy`
 
-### klight.yaml JSON schema published to klight.dev
-`$schema=https://klight.dev/schema/klight.yaml.json` is already in the YAML files but the URL 404s.
-Publish the schema to GitHub Pages under a `klight.dev` custom domain or `slothlabsorg.github.io/klight`.
+### klight.yaml JSON schema published to GitHub Pages
+`$schema=https://slothlabsorg.github.io/klight/schema/klight.yaml.json` — published via GitHub Pages.
+Schema lives in `schema/klight.yaml.json`; the `pages.yml` workflow deploys it on every push to main.
 
 ---
 

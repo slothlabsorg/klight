@@ -67,6 +67,8 @@ def up_from_repos(
     Example:
       klight from-repos ./store-api ./inventory-api ./store-web --env alice
     """
+    from klight.commands._context import assert_safe_context
+    assert_safe_context()
     ns = f"env-{env_name}"
 
     # Load all klight.yaml files

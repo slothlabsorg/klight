@@ -252,7 +252,7 @@ def generate_klight_yamls(req: GenerateRequest):
         image = f"{req.registry}/{repo_name}:{req.image_tag}"
 
         yaml_lines = [
-            "# yaml-language-server: $schema=https://klight.dev/schema/klight.yaml.json",
+            "# yaml-language-server: $schema=https://slothlabsorg.github.io/klight/schema/klight.yaml.json",
             f"name: {repo_name}",
             f"port: {port}",
             f"health: {health}",

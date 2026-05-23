@@ -81,7 +81,7 @@ klight up store --env alice                                 # same commands, clo
 ### The `klight.yaml` (add one to each service repo)
 
 ```yaml
-# yaml-language-server: $schema=https://klight.dev/schema/klight.yaml.json
+# yaml-language-server: $schema=https://slothlabsorg.github.io/klight/schema/klight.yaml.json
 name: inventory-api
 port: 8081
 health: /health
