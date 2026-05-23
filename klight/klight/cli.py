@@ -282,6 +282,13 @@ def setup(
     _setup(token=token, org=org, platform=platform, yes=yes)
 
 
+@app.command(name="mcp")
+def mcp_server() -> None:
+    """Start the klight MCP server for Claude / LLM integration."""
+    from klight.mcp_server import mcp
+    mcp.run()
+
+
 def main() -> None:
     app()
 
