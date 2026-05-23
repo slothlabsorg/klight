@@ -161,6 +161,10 @@ Add any of these to `needs:` in your `klight.yaml`:
 
 Add your own in `klight-catalog.yaml` at your project root — no changes to klight needed.
 
+If a service declares `needs: [postgres-store]` but `postgres-store` is not in the built-in catalog or
+your `klight-catalog.yaml`, klight fails with a clear message listing what's missing and pointing to
+`docs/12-custom-catalog.md`. The Setup Wizard also detects missing catalog entries when scanning repos.
+
 ---
 
 ## Developer reference
