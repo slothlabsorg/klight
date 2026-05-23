@@ -139,7 +139,7 @@ def _generate_klight_yaml(svc_name: str, scanned, ci_images: dict, repo_name: st
                 env[key] = value
 
     lines = [
-        "# yaml-language-server: $schema=https://klight.dev/schema/klight.yaml.json",
+        "# yaml-language-server: $schema=https://slothlabsorg.github.io/klight/schema/klight.yaml.json",
         f"name: {svc_name}",
         f"port: {port}",
         f"health: {health}",

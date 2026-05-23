@@ -1,0 +1,318 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://slothlabsorg.github.io/klight/schema/klight.yaml.json",
+  "title": "klight.yaml",
+  "description": "Service manifest for klight — declares how klight should deploy, wire, and run a service in a Kubernetes namespace environment.",
+  "type": "object",
+  "required": ["name", "port"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "title": "Service name",
+      "description": "Kubernetes service name and DNS hostname within the namespace. Used as the image name (name:local) when image is omitted. Must be a valid DNS label.",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "examples": ["inventory-api", "store-web", "billing-service"]
+    },
+    "port": {
+      "type": "integer",
+      "title": "HTTP port",
+      "description": "The port your service listens on. Used for the Kubernetes Service, readiness/liveness probes, and sentinel dependency checks.",
+      "minimum": 1,
+      "maximum": 65535,
+      "examples": [8080, 8081, 3000, 3002]
+    },
+    "health": {
+      "type": "string",
+      "title": "Health check path",
+      "description": "HTTP path for readiness and liveness probes. Defaults to /health. Spring Boot services typically use /actuator/health.",
+      "default": "/health",
+      "examples": ["/health", "/actuator/health", "/healthz", "/"]
+    },
+    "image": {
+      "type": "string",
+      "title": "Docker image",
+      "description": "Docker image to run. If omitted, klight uses <name>:local (built locally). Use image: name:local for local builds, or a full registry path for remote images.",
+      "examples": ["inventory-api:local", "my-org/inventory-api:v1.2.3", "ghcr.io/my-org/my-service:latest"]
+    },
+    "needs": {
+      "title": "Infrastructure dependencies",
+      "description": "Infra services this service requires. klight starts them in the namespace and injects their env vars automatically. Reference entries from the klight catalog (postgres, redis, kafka, localstack, mysql, mongodb, rabbitmq, vault, elasticsearch, ollama, chromadb) or custom catalog entries.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Catalog infra name with default settings.",
+                "examples": ["postgres", "kafka", "redis", "localstack"]
+              },
+              {
+                "type": "object",
+                "description": "Catalog infra name with overrides.",
+                "maxProperties": 1,
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": ["local", "external"],
+                      "default": "local",
+                      "description": "local: klight spins up a StatefulSet in the namespace. external: use real infra (only injects env vars, no StatefulSet)."
+                    }
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "description": "Environment variable override for this infra dependency."
+                  }
+                }
+              }
+            ]
+          },
+          "examples": [
+            ["postgres", "kafka"],
+            ["postgres", "redis"],
+            [{"postgres": {"mode": "external", "GLOBAL_POSTGRES_HOST": "prod-db.example.com"}}]
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Map form: infra name → options.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["local", "external"],
+                "default": "local"
+              }
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "depends": {
+      "type": "array",
+      "title": "Service startup dependencies",
+      "description": "Other services (not infra) that must be healthy before this service starts. Expressed as host:port or host:port/path. klight's sentinel init container blocks until these are reachable.",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9._-]+(:[0-9]+(/.*)?)?"
+      },
+      "examples": [
+        ["postgres:5432", "kafka:9092"],
+        ["inventory-api:8081/health", "store-api:8080"]
+      ]
+    },
+    "env": {
+      "type": "object",
+      "title": "Environment variables",
+      "description": "Key-value environment variables injected into the service container via a ConfigMap. Write the exact names your code already reads — no code changes needed. Values are always strings.",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "examples": [
+        {
+          "DB_HOST": "postgres",
+          "DB_PORT": "5432",
+          "DB_NAME": "my_service_db",
+          "KAFKA_BOOTSTRAP_SERVERS": "kafka:9092"
+        }
+      ]
+    },
+    "migration": {
+      "type": "object",
+      "title": "Database migration",
+      "description": "Run a migration Job before the service Deployment starts. klight creates a Kubernetes Job that runs the command and waits for completion. The Job uses the same image as the service.",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "array",
+          "title": "Migration command",
+          "description": "Command and arguments to run as the migration Job entrypoint.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "examples": [
+            ["python", "-m", "app.migrate"],
+            ["./gradlew", "flywayMigrate"],
+            ["npm", "run", "migrate"],
+            ["python", "migrate.py"]
+          ]
+        },
+        "version": {
+          "type": "string",
+          "title": "Migration version",
+          "description": "Opaque version string. klight uses this to decide whether to re-run the migration Job.",
+          "default": "v1",
+          "examples": ["v1", "v2", "2024-01-15"]
+        }
+      },
+      "examples": [
+        {"command": ["python", "-m", "app.migrate"]},
+        {"command": ["./gradlew", "flywayMigrate"], "version": "v2"}
+      ]
+    },
+    "build": {
+      "type": "object",
+      "title": "Build configuration",
+      "description": "Custom build command for non-standard builds (Gradle Jib, SBT, Quarkus, monorepos). When present, klight calls this command instead of docker build.",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "title": "Build command",
+          "description": "Shell command that builds the Docker image.",
+          "examples": [
+            "./gradlew banking:jib --image=banking:local",
+            "./gradlew bootBuildImage --imageName=my-service:local",
+            "docker build -t my-service:local ."
+          ]
+        },
+        "context": {
+          "type": "string",
+          "title": "Build context",
+          "description": "Directory to use as the build context. Defaults to '.' (the service repo root). Use '../' for monorepo builds.",
+          "default": ".",
+          "examples": [".", "../", "../../monorepo-root"]
+        },
+        "tag": {
+          "type": "string",
+          "title": "Output image tag",
+          "description": "Image tag produced by the build command. Overrides the 'image' field when present.",
+          "examples": ["banking:local", "my-service:local"]
+        }
+      }
+    },
+    "manifest": {
+      "type": "string",
+      "title": "Existing K8s manifests path",
+      "description": "Path to an existing Kustomize overlay or base directory. When set, klight uses these manifests instead of generating new ones. klight still manages infra from 'needs' and injects the sentinel init container via kubectl patch.",
+      "examples": [
+        "./deploy/overlays/dev",
+        "./deploy/overlays/local",
+        "./deploy/base",
+        "../infra-repo/services/my-service/overlays/dev"
+      ]
+    },
+    "replicas": {
+      "type": "integer",
+      "title": "Replica count",
+      "description": "Number of pod replicas for the service Deployment. Defaults to 1. In local environments, keep this at 1 to conserve resources.",
+      "default": 1,
+      "minimum": 0,
+      "examples": [1, 2, 3]
+    },
+    "resources": {
+      "type": "object",
+      "title": "Resource requests and limits",
+      "description": "Kubernetes resource requests and limits for the service container. When omitted, klight applies defaults (100m CPU request, 128Mi memory request, 256Mi memory limit).",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "type": "object",
+          "title": "Resource requests",
+          "description": "Minimum resources guaranteed by the scheduler.",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": {
+              "type": "string",
+              "title": "CPU request",
+              "description": "CPU request in millicores (e.g. '100m') or cores (e.g. '0.5').",
+              "examples": ["100m", "250m", "500m", "1"]
+            },
+            "memory": {
+              "type": "string",
+              "title": "Memory request",
+              "description": "Memory request with unit suffix (Mi, Gi).",
+              "examples": ["128Mi", "256Mi", "512Mi", "1Gi"]
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "title": "Resource limits",
+          "description": "Maximum resources the container may consume.",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": {
+              "type": "string",
+              "title": "CPU limit",
+              "description": "CPU limit in millicores (e.g. '500m') or cores (e.g. '1').",
+              "examples": ["500m", "1", "2"]
+            },
+            "memory": {
+              "type": "string",
+              "title": "Memory limit",
+              "description": "Memory limit with unit suffix (Mi, Gi).",
+              "examples": ["256Mi", "512Mi", "1Gi", "2Gi"]
+            }
+          }
+        }
+      },
+      "examples": [
+        {
+          "requests": {"cpu": "100m", "memory": "128Mi"},
+          "limits": {"cpu": "500m", "memory": "256Mi"}
+        }
+      ]
+    },
+    "watch_paths": {
+      "type": "array",
+      "title": "Watch paths",
+      "description": "Directories to watch for file changes during 'klight watch'. When a file changes under these paths, klight rebuilds and redeploys the service automatically.",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        ["src/"],
+        ["src/", "templates/"],
+        ["app/", "migrations/"]
+      ]
+    }
+  },
+  "examples": [
+    {
+      "name": "inventory-api",
+      "port": 8081,
+      "health": "/health",
+      "image": "inventory-api:local",
+      "needs": ["postgres", "kafka"],
+      "migration": {
+        "command": ["python", "-m", "app.migrate"]
+      },
+      "env": {
+        "DB_HOST": "postgres",
+        "DB_PORT": "5432",
+        "DB_NAME": "inventory_db",
+        "KAFKA_BOOTSTRAP_SERVERS": "kafka:9092"
+      }
+    },
+    {
+      "name": "billing-service",
+      "port": 8082,
+      "health": "/actuator/health",
+      "image": "billing-service:local",
+      "needs": ["kafka"],
+      "env": {
+        "KAFKA_BOOTSTRAP_SERVERS": "kafka:9092"
+      }
+    },
+    {
+      "name": "sales-recorder",
+      "port": 3002,
+      "health": "/health",
+      "image": "sales-recorder:local",
+      "manifest": "./deploy/overlays/dev",
+      "needs": ["postgres", "kafka"],
+      "watch_paths": ["src/"]
+    }
+  ]
+}

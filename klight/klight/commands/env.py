@@ -73,6 +73,8 @@ def destroy(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
 ) -> None:
     """Destroy an environment and all its resources. Irreversible."""
+    from klight.commands._context import assert_safe_context
+    assert_safe_context()
     ns = _ns(name)
     if not yes:
         typer.confirm(

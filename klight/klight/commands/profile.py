@@ -225,6 +225,8 @@ def up(
     timeout: int = typer.Option(300, "--timeout"),
 ) -> None:
     """Bring up all services in a profile. Supports includes: for composed profiles."""
+    from klight.commands._context import assert_safe_context
+    assert_safe_context()
     ns = f"env-{env_name}"
     from klight import kubectl as kctl
     console.print(f"\n[bold]Profile:[/bold] {name} → {env_name}\n")
@@ -269,6 +271,8 @@ def down(
     env_name: str = typer.Option(..., "--env"),
 ) -> None:
     """Scale down all services in a profile."""
+    from klight.commands._context import assert_safe_context
+    assert_safe_context()
     ns = f"env-{env_name}"
     from klight import kubectl as kctl
     try:
