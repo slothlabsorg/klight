@@ -1,7 +1,7 @@
 import typer
 from pathlib import Path
 from typing import Optional
-from klight.commands import env, service, db, profile, vault
+from klight.commands import env, service, db, profile, vault, secrets as secrets_cmd
 from klight.commands import ps, unready, open_, exec_, local
 from klight.commands import ui
 from klight.commands import watch
@@ -25,6 +25,7 @@ app.add_typer(profile.app, name="profile")
 app.add_typer(vault.app, name="vault")
 app.add_typer(local.app, name="local")
 app.add_typer(target_cmd.app, name="cluster")
+app.add_typer(secrets_cmd.app, name="secrets")
 
 
 # --- Top-level dev-friendly commands (kcs-inspired UX) ---
@@ -167,8 +168,8 @@ def logs(
     since: Optional[str] = typer.Option(None, "--since"),
 ) -> None:
     """Stream logs from a service."""
-    from klight.commands.service import logs as service_logs
-    service_logs(service_name, env_name=env_name, follow=follow, tail=tail, since=since)
+    from klight.commands.service import fetch_logs
+    fetch_logs(service_name, env_name, follow=follow, tail=tail, since=since)
 
 
 

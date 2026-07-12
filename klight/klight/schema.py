@@ -48,6 +48,7 @@ class KlightConfig:
     needs: list[NeedConfig] = field(default_factory=list)
     depends: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    secrets: list[str] = field(default_factory=list)
     migration: Optional[MigrationConfig] = None
     build: Optional[BuildConfig] = None
     watch_paths: list[str] = field(default_factory=list)
@@ -111,11 +112,16 @@ class KlightConfig:
             needs=needs,
             depends=data.get("depends", []),
             env=data.get("env", {}),
+            secrets=data.get("secrets", []) or [],
             migration=migration,
             build=build,
             watch_paths=data.get("watch_paths", []),
             repo_path=repo_path,
         )
+
+    def secret_name(self) -> str:
+        """Name of the per-service Secret materialized from the secrets: list."""
+        return f"{self.name}-secrets"
 
     def effective_image(self) -> str:
         if self.build and self.build.tag:

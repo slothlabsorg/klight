@@ -47,6 +47,27 @@ def deploy(
         console.print(f"Check: kubectl -n {ns} get pods -l app={name}")
 
 
+def fetch_logs(
+    name: str,
+    env_name: str,
+    *,
+    follow: bool = False,
+    tail: int = 100,
+    since: str | None = None,
+    container: str | None = None,
+) -> None:
+    """Stream or fetch logs from a service deployment."""
+    ns = f"env-{env_name}"
+    args = ["logs", f"deployment/{name}", "-n", ns, f"--tail={tail}"]
+    if follow:
+        args.append("-f")
+    if since:
+        args.append(f"--since={since}")
+    if container:
+        args.extend(["-c", container])
+    k.run(args, capture=False)
+
+
 @app.command()
 def logs(
     name: str = typer.Argument(..., help="Service name"),
@@ -57,15 +78,7 @@ def logs(
     container: str = typer.Option(None, "--container", "-c", help="Container name"),
 ) -> None:
     """Stream or fetch logs from a service."""
-    ns = f"env-{env_name}"
-    args = ["logs", f"deployment/{name}", "-n", ns, f"--tail={tail}"]
-    if follow:
-        args.append("-f")
-    if since:
-        args.append(f"--since={since}")
-    if container:
-        args.extend(["-c", container])
-    k.run(args, capture=False)
+    fetch_logs(name, env_name, follow=follow, tail=tail, since=since, container=container)
 
 
 @app.command()

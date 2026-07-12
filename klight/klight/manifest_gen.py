@@ -18,6 +18,32 @@ def _pull_policy(image: str) -> str:
     return "IfNotPresent"
 
 
+def _env_from(cfg: KlightConfig) -> list[dict]:
+    """envFrom sources: global config/secrets, per-service config, and
+    (when declared) a per-service Secret materialized from secrets:.
+
+    The per-service secretRef is marked optional so the service still starts in
+    "mock mode" before any secret is set via `klight secrets set`.
+    """
+    sources = [
+        {"configMapRef": {"name": "klight-global-config"}},
+        {"configMapRef": {"name": f"{cfg.name}-config"}},
+        {"secretRef": {"name": "klight-global-secrets"}},
+    ]
+    if getattr(cfg, "secrets", None):
+        sources.append({"secretRef": {"name": cfg.secret_name(), "optional": True}})
+    return sources
+
+
+def _probe(cfg: KlightConfig, initial: int, period: int) -> dict:
+    """HTTP probe when a health path is set; TCP probe otherwise (e.g. gRPC)."""
+    if cfg.health:
+        action = {"httpGet": {"path": cfg.health, "port": cfg.port}}
+    else:
+        action = {"tcpSocket": {"port": cfg.port}}
+    return {**action, "initialDelaySeconds": initial, "periodSeconds": period}
+
+
 def deployment(cfg: KlightConfig) -> dict[str, Any]:
     sentinel_deps = cfg.sentinel_deps()
     return {
@@ -47,25 +73,13 @@ def deployment(cfg: KlightConfig) -> dict[str, Any]:
                             "image": cfg.effective_image(),
                             "imagePullPolicy": _pull_policy(cfg.effective_image()),
                             "ports": [{"containerPort": cfg.port}],
-                            "envFrom": [
-                                {"configMapRef": {"name": "klight-global-config"}},
-                                {"configMapRef": {"name": f"{cfg.name}-config"}},
-                                {"secretRef": {"name": "klight-global-secrets"}},
-                            ],
+                            "envFrom": _env_from(cfg),
                             "resources": {
                                 "requests": {"cpu": "100m", "memory": "128Mi"},
                                 "limits": {"memory": "256Mi"},
                             },
-                            "readinessProbe": {
-                                "httpGet": {"path": cfg.health, "port": cfg.port},
-                                "initialDelaySeconds": 10,
-                                "periodSeconds": 5,
-                            },
-                            "livenessProbe": {
-                                "httpGet": {"path": cfg.health, "port": cfg.port},
-                                "initialDelaySeconds": 20,
-                                "periodSeconds": 10,
-                            },
+                            "readinessProbe": _probe(cfg, initial=10, period=5),
+                            "livenessProbe": _probe(cfg, initial=20, period=10),
                         }
                     ],
                 },
@@ -135,11 +149,7 @@ def migration_job(cfg: KlightConfig) -> dict[str, Any] | None:
                             "image": cfg.effective_image(),
                             "imagePullPolicy": _pull_policy(cfg.effective_image()),
                             "command": cfg.migration.command,
-                            "envFrom": [
-                                {"configMapRef": {"name": "klight-global-config"}},
-                                {"configMapRef": {"name": f"{cfg.name}-config"}},
-                                {"secretRef": {"name": "klight-global-secrets"}},
-                            ],
+                            "envFrom": _env_from(cfg),
                         }
                     ],
                 }
