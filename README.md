@@ -282,7 +282,7 @@ klight-ui/       FastAPI dashboard server + Playwright tests
 manifests/       K8s templates for infrastructure + service scaffold
 sentinel/        busybox init container for startup ordering
 examples/        Working examples: tienda demo, company-infra structure
-docs/            In-depth guides for each feature area
+docs/            In-depth guides — start with docs/00-manual-por-rol.md (by role)
 WORKSHOP.md      Video scripts for World 1, 2, 3 with speech + screen actions
 ```
 

@@ -1,6 +1,6 @@
 # klight — Roadmap
 
-Last updated: 2026-05-21
+Last updated: 2026-06-13
 
 ---
 
@@ -8,15 +8,17 @@ Last updated: 2026-05-21
 
 - Architecture, sentinel init container, Kustomize base/overlay templates
 - CLI scaffold: `env`, `service`, `db`, `profile`, `ps`, `unready`, `open`, `exec`, `logs`
-- `klight local setup/resize/build-load/status` — minikube klight-demo profile
+- `klight local setup/resize/build-load/status/preload-infra` — minikube klight-demo profile
 - `klight from-repos` — World 1: deploy from local klight.yaml files
 - `klight up/destroy` — World 2/3: deploy from team-synced profiles
 - `klight sync` — download + cache klight-team.yaml from URL
 - `klight replace` — hot-swap a running service with local build
+- `klight watch` — Tilt-style live reload (implemented + tests)
 - `klight cluster setup-remote` — create SA + RBAC + 1-year token for DevOps
 - `klight connect --url --token` / `--kubeconfig` — register remote cluster
 - `klight use local/remote` + `klight target` — switch cluster targets
-- `klight watch`, `klight preflight`, `klight init` (scaffold)
+- Context validation guard — warn on production-like kubectl context
+- `klight preflight`, `klight init` (scaffold)
 - `klight ui` — FastAPI dashboard at localhost:7700
   - Cluster status bar (CPUs, RAM, context)
   - Environment list with service cards
@@ -39,18 +41,14 @@ Last updated: 2026-05-21
 
 ## 🔥 Next sprint — v0.2 (High priority, immediate value)
 
-### `klight watch` — Tilt-style live reload
-Auto-detect file changes → rebuild → replace. The killer DX feature Tilt has that klight needs.
-```bash
-klight watch store-api --env dev   # watches ./store-api, rebuilds+replaces on change
-klight watch --all --env dev       # watch all locally-built services
-```
-Files: `klight/klight/commands/watch.py` (scaffold exists, needs implementation)
+### ~~`klight watch`~~ ✅ Done
+Implemented in `klight/klight/commands/watch.py` with unit + integration tests.
 
 ### ~~PyPI publish~~ ✅ Done
 ### ~~`klight preload-infra`~~ ✅ Done
 ### ~~Context validation guard~~ ✅ Done
 ### ~~klight.yaml JSON schema published to GitHub Pages~~ ✅ Done
+### ~~`docs/12-custom-catalog.md`~~ ✅ Done
 
 ### Setup Wizard catalog detection
 When scanning repos, the Setup Wizard detects `needs:` entries that don't match any built-in

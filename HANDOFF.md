@@ -40,27 +40,18 @@ Status as of last push:
 
 ## 2. CLI features — manual smoke tests
 
-Run through these on a fresh machine after `make install` to confirm the
-binary is intact.
+Run through these on a fresh machine after `pip install -e ".[dev]"` in `klight/`:
 
-- [ ] `klight init` on a fresh machine creates `~/.klight/config.yaml`
-      with sensible defaults
-- [ ] `klight up` on minikube spins up the demo namespace with
-      Postgres → Kafka → Redis in dependency order (verify with
-      `kubectl get pods -n <ns>` between steps)
-- [ ] `klight up --remote eks` against a real EKS context provisions the
-      same namespace pattern (test with the test cluster, not prod)
-- [ ] `klight down` cleans up the namespace fully — no orphan PVCs, no
-      leaked Secrets
-- [ ] `klight switch <env>` flips kubeconfig context AND klight's local
-      env pointer; `kubectl config current-context` reflects the change
-- [ ] **Pending CLI additions** (per project memory):
-  - [ ] `klight ps` — list running services in the active namespace
-  - [ ] `klight unready` — show pods not ready with last event reason
-  - [ ] `klight open <service>` — port-forward + open in browser
-  - [ ] `klight local <service>` — swap the in-cluster service with a
-        local proxy back to your laptop
-- [ ] `klight --version` reports the right semver (matches the tag)
+- [x] `klight init` on a fresh machine creates sensible defaults
+- [x] `klight up` on minikube spins up namespace with Postgres → Kafka → Redis in order
+- [x] `klight env destroy` cleans up namespace fully
+- [x] `klight ps` — list running services in the active namespace
+- [x] `klight unready` — show pods not ready with last event reason
+- [x] `klight open <service>` — port-forward + open in browser
+- [x] `klight local build-load` — build and load images into minikube
+- [x] `klight from-repos`, `klight sync`, `klight watch`, `klight replace`
+- [ ] `klight up` against a real EKS context (test cluster only, not prod)
+- [ ] `klight --version` flag (not yet implemented — use `pip show klight`)
 
 ---
 
@@ -94,12 +85,12 @@ or the install.sh re-run.
 
 ## 5. Pre-flight before tagging v0.1.0
 
-- [ ] `make test` is green (Go unit tests cover the CLI)
-- [ ] `make e2e` against minikube passes
-- [ ] TiendaDemo Playwright Worlds 1–3 all green
-- [ ] `install.sh` works on a fresh macOS (Apple Silicon + Intel) and
-      a fresh Ubuntu 22.04 box
-- [ ] Homebrew formula renders cleanly in `brew install --debug`
+- [ ] `cd klight && python -m pytest tests/ -m "not integration" -v` is green
+- [ ] Integration tests pass with minikube (`pytest -m integration`)
+- [ ] TiendaDemo checklist 18/18 in `klight-suite-test/docs/RESULTS.md`
+- [ ] TiendaDemo Playwright Worlds 1–2 green (World 3 requires remote cluster)
+- [ ] `pip install -e .` works on fresh macOS and Ubuntu
+- [ ] Homebrew formula renders cleanly in `brew install --debug` (when tap exists)
 - [ ] README install instructions match the actual release artifact path
 
 When everything above is green, tag the version and let CI ship the binaries
