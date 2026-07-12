@@ -485,6 +485,72 @@ def resize_cluster(req: ResizeRequest):
     return {"ok": True, "profile": req.profile, "cpus": req.cpus, "memory_mb": req.memory_mb}
 
 
+# ─── Onboarding assistant API ─────────────────────────────────────────────────
+
+@app.get("/api/onboarding/probe")
+def onboarding_probe():
+    """Detect the user's environment so the assistant skips questions it can answer.
+
+    Returns capability flags used by the "Get started" tab:
+      - kubectl_access: kubectl reaches a cluster (cluster-info ok)
+      - local_cluster:  klight-demo minikube is running
+      - has_team_yaml:  a klight-team.yaml has been synced (~/.klight)
+      - active_target:  local / remote / custom (from klight target)
+    """
+    result = {
+        "kubectl_access": False,
+        "local_cluster": False,
+        "has_team_yaml": False,
+        "team_name": None,
+        "profiles": [],
+        "active_target": None,
+    }
+
+    # kubectl access (any reachable cluster)
+    try:
+        r = subprocess.run(["kubectl", "cluster-info"], capture_output=True, text=True, timeout=5)
+        result["kubectl_access"] = r.returncode == 0
+    except Exception:
+        pass
+
+    # local minikube cluster
+    try:
+        info = cluster_info()
+        result["local_cluster"] = str(info.get("status", "")).lower() == "running"
+    except Exception:
+        pass
+
+    # synced team.yaml
+    try:
+        from klight.commands.sync import get_active_team
+        team = get_active_team()
+        if team:
+            result["has_team_yaml"] = True
+            result["team_name"] = team.get("team")
+            result["profiles"] = list(team.get("profiles", {}).keys())
+    except Exception:
+        pass
+
+    # active cluster target (derived from kubectl current-context)
+    try:
+        r = subprocess.run(
+            ["kubectl", "config", "current-context"],
+            capture_output=True, text=True, timeout=5,
+        )
+        ctx = r.stdout.strip()
+        if ctx:
+            if ctx == "klight-demo":
+                result["active_target"] = "local"
+            elif "remote" in ctx:
+                result["active_target"] = "remote"
+            else:
+                result["active_target"] = ctx
+    except Exception:
+        pass
+
+    return result
+
+
 # ─── HTML Frontend ────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -513,7 +579,8 @@ HTML = """<!DOCTYPE html>
   <img src="/static/images/klight-logo.png" class="h-8 w-8 rounded" alt="klight">
   <span class="font-bold text-xl" style="color:#B4FF3C">klight</span>
   <div class="ml-auto flex gap-2">
-    <button onclick="tab('envs')" id="tb-envs" class="px-3 py-1 rounded text-sm" style="background:#B4FF3C;color:#050d1f">Environments</button>
+    <button onclick="tab('start')" id="tb-start" class="px-3 py-1 rounded text-sm" style="background:#B4FF3C;color:#050d1f">Get started</button>
+    <button onclick="tab('envs')" id="tb-envs" class="px-3 py-1 rounded text-sm text-slate-300 hover:bg-slate-700">Environments</button>
     <button onclick="tab('setup')" id="tb-setup" class="px-3 py-1 rounded text-sm text-slate-300 hover:bg-slate-700">Setup Wizard</button>
     <button onclick="tab('about')" id="tb-about" class="px-3 py-1 rounded text-sm text-slate-300 hover:bg-slate-700">About</button>
   </div>
@@ -578,8 +645,59 @@ HTML = """<!DOCTYPE html>
 <!-- main -->
 <main class="flex-1 overflow-hidden flex flex-col">
 
+<!-- GET STARTED TAB (role-based onboarding assistant) -->
+<div id="tab-start" class="hidden flex-1 overflow-y-auto p-6">
+  <div class="max-w-2xl">
+    <h2 class="text-xl font-bold mb-1">Get started</h2>
+    <p class="text-slate-400 text-sm mb-4">Te hacemos un par de preguntas y te llevamos al flujo y los comandos correctos para tu rol. No necesitas saber Kubernetes.</p>
+
+    <!-- Auto-detected capabilities -->
+    <div id="probe-banner" class="rounded-lg p-3 mb-5 text-xs" style="background:#0d1b3e;border:1px solid #1a3060">
+      <span class="text-slate-400">Detectando tu entorno…</span>
+    </div>
+
+    <!-- Q0: role -->
+    <div id="q-role" class="rounded-lg p-5 mb-4" style="background:#0d1b3e">
+      <h3 class="font-semibold mb-3" style="color:#B4FF3C">¿Qué eres?</h3>
+      <div class="grid grid-cols-1 gap-2">
+        <button onclick="pickRole('dev')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
+          <span class="font-medium text-white">Desarrollador</span>
+          <span class="block text-xs text-slate-400">Escribo código de uno o más servicios</span>
+        </button>
+        <button onclick="pickRole('devops')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
+          <span class="font-medium text-white">DevOps / Plataforma</span>
+          <span class="block text-xs text-slate-400">Monto la infra y el archivo central del equipo</span>
+        </button>
+        <button onclick="pickRole('techlead')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
+          <span class="font-medium text-white">Tech lead / Arquitecto</span>
+          <span class="block text-xs text-slate-400">Decido arquitectura, varios lenguajes (gRPC, GraphQL)</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Q1: follow-up (dynamic) -->
+    <div id="q-follow" class="hidden rounded-lg p-5 mb-4" style="background:#0d1b3e">
+      <h3 id="q-follow-title" class="font-semibold mb-3" style="color:#B4FF3C"></h3>
+      <div id="q-follow-opts" class="grid grid-cols-1 gap-2"></div>
+    </div>
+
+    <!-- Result -->
+    <div id="q-result" class="hidden rounded-lg p-5 mb-4" style="background:#050d1f;border:1px solid #B4FF3C">
+      <h3 id="q-result-title" class="font-semibold mb-2" style="color:#B4FF3C"></h3>
+      <p id="q-result-desc" class="text-sm text-slate-300 mb-3"></p>
+      <div class="text-xs text-slate-400 mb-1">Corre estos comandos:</div>
+      <pre id="q-result-cmd" class="text-green-400 rounded p-3 mb-3" style="background:#020810"></pre>
+      <div class="flex gap-2 flex-wrap">
+        <a id="q-result-link" href="#" target="_blank" class="px-3 py-2 rounded text-sm font-semibold no-underline" style="background:#B4FF3C;color:#050d1f">Abrir WORKSHOP.md</a>
+        <button id="q-result-goto" onclick="" class="px-3 py-2 rounded text-sm text-slate-200" style="border:1px solid #1a3060"></button>
+        <button onclick="resetAssistant()" class="px-3 py-2 rounded text-sm text-slate-400" style="border:1px solid #1a3060">↺ Empezar de nuevo</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ENVIRONMENTS TAB -->
-<div id="tab-envs" class="flex-1 flex flex-col overflow-hidden">
+<div id="tab-envs" class="hidden flex-1 flex flex-col overflow-hidden">
   <div class="flex-1 overflow-y-auto p-5" id="services-panel">
     <div class="flex flex-col items-center justify-center h-full text-center py-12">
       <img src="/static/images/klight-sloth4.png" class="w-48 mb-6 opacity-80" alt="klight sloth">
@@ -708,7 +826,7 @@ const _infraRepo = () => document.getElementById('s-infra-repo').value;
 
 // Tab switching
 function tab(name) {
-  ['envs','setup','about'].forEach(t => {
+  ['start','envs','setup','about'].forEach(t => {
     document.getElementById('tab-' + t).classList.toggle('hidden', t !== name);
     const btn = document.getElementById('tb-' + t);
     if (t === name) {
@@ -1065,6 +1183,121 @@ async function onProfileChange() {
   }
 }
 
+// ── Get started assistant ─────────────────────────────────────────────────────
+const REPO_BASE = 'https://github.com/slothlabsorg/klight-suite-test/blob/main/demos';
+let probeData = null;
+
+const WORKSHOPS = {
+  dev:      { demo: 'dev-students',       link: REPO_BASE + '/dev-students/WORKSHOP.md' },
+  devops:   { demo: 'devops-todo',        link: REPO_BASE + '/devops-todo/WORKSHOP.md' },
+  techlead: { demo: 'techlead-dropship',  link: REPO_BASE + '/techlead-dropship/WORKSHOP.md' },
+};
+
+async function loadProbe() {
+  const b = document.getElementById('probe-banner');
+  try {
+    probeData = await fetch('/api/onboarding/probe').then(r=>r.json());
+  } catch { probeData = null; }
+  if (!probeData) { b.innerHTML = '<span class="text-slate-400">No se pudo detectar el entorno (sigue igual abajo).</span>'; return; }
+  const chip = (ok, label) => `<span class="px-2 py-0.5 rounded mr-1" style="background:${ok?'#0f2a14':'#2a0f0f'};color:${ok?'#86efac':'#fca5a5'}">${ok?'✓':'✗'} ${label}</span>`;
+  let extra = '';
+  if (probeData.has_team_yaml) extra += ` <span class="text-slate-400">· team '${probeData.team_name}' (${(probeData.profiles||[]).join(', ')||'sin profiles'})</span>`;
+  if (probeData.active_target) extra += ` <span class="text-slate-400">· target: ${probeData.active_target}</span>`;
+  b.innerHTML = '<span class="text-slate-400 mr-2">Detectado:</span>' +
+    chip(probeData.kubectl_access, 'acceso kubectl') +
+    chip(probeData.local_cluster, 'minikube local') +
+    chip(probeData.has_team_yaml, 'klight-team.yaml') + extra;
+}
+
+function pickRole(role) {
+  const fq = document.getElementById('q-follow');
+  const title = document.getElementById('q-follow-title');
+  const opts = document.getElementById('q-follow-opts');
+  document.getElementById('q-result').classList.add('hidden');
+
+  if (role === 'dev') {
+    title.textContent = '¿Tienes los repos clonados localmente?';
+    opts.innerHTML = `
+      <button onclick="result('dev','local')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
+        <span class="font-medium text-white">Sí, tengo los repos</span>
+        <span class="block text-xs text-slate-400">World 1 — klight from-repos</span></button>
+      <button onclick="result('dev','sync')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
+        <span class="font-medium text-white">No, tengo una URL de klight-team.yaml</span>
+        <span class="block text-xs text-slate-400">klight sync + klight up (sin clonar)</span></button>`;
+  } else if (role === 'devops') {
+    title.textContent = '¿Tienes acceso a un cluster?';
+    opts.innerHTML = `
+      <button onclick="result('devops','local')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
+        <span class="font-medium text-white">Solo minikube local</span>
+        <span class="block text-xs text-slate-400">Setup Wizard + demo company-infra</span></button>
+      <button onclick="result('devops','remote')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
+        <span class="font-medium text-white">Cluster remoto (EKS/GKE)</span>
+        <span class="block text-xs text-slate-400">klight connect + klight use remote</span></button>`;
+  } else {
+    // techlead: no follow-up needed
+    result('techlead', 'polyglot');
+    fq.classList.add('hidden');
+    return;
+  }
+  fq.classList.remove('hidden');
+}
+
+const RESULTS = {
+  'dev|local': {
+    title: 'Ruta World 1 — desarrollo local',
+    desc: 'Clones locales: klight construye y despliega tus servicios en orden de dependencias.',
+    cmd: `klight local setup\nklight from-repos ./services/* --env dev\nklight open students-web --env dev`,
+    role: 'dev', goto: 'envs', gotoLabel: 'Ver Environments',
+  },
+  'dev|sync': {
+    title: 'Ruta sync — sin clonar servicios',
+    desc: 'Apunta al archivo central del equipo y levanta un profile completo.',
+    cmd: `klight sync https://raw.githubusercontent.com/<org>/company-infra/main/klight-team.yaml\nklight use local\nklight up <profile> --env dev`,
+    role: 'dev', goto: 'envs', gotoLabel: 'Ver Environments',
+  },
+  'devops|local': {
+    title: 'Ruta DevOps local — crear el archivo central',
+    desc: 'Usa el Setup Wizard para escanear tus repos y generar klight-team.yaml, luego pruébalo con el demo company-infra.',
+    cmd: `klight local setup\n# Genera klight-team.yaml con el Setup Wizard (pestaña de arriba)\nklight up todo --env alice`,
+    role: 'devops', goto: 'setup', gotoLabel: 'Abrir Setup Wizard',
+  },
+  'devops|remote': {
+    title: 'Ruta DevOps remoto — cluster compartido',
+    desc: 'Conecta el cluster remoto y cambia de target. Los devs harán klight up contra el cluster.',
+    cmd: `klight connect --kubeconfig ~/company-dev.yaml\nklight use remote\nklight up todo --env alice`,
+    role: 'devops', goto: 'setup', gotoLabel: 'Abrir Setup Wizard',
+  },
+  'techlead|polyglot': {
+    title: 'Ruta polyglot — gRPC + GraphQL',
+    desc: 'Servicios en distintos lenguajes (Rust gRPC), un BFF GraphQL y build custom. klight orquesta sin tocar tu código.',
+    cmd: `klight local setup\nklight local resize --memory 8192 --cpus 4\nklight from-repos ./services/* --env tl\nklight open dropship-web --env tl`,
+    role: 'techlead', goto: 'envs', gotoLabel: 'Ver Environments',
+  },
+};
+
+function result(role, choice) {
+  const r = RESULTS[role + '|' + choice];
+  if (!r) return;
+  document.getElementById('q-result-title').textContent = r.title;
+  document.getElementById('q-result-desc').textContent = r.desc;
+  document.getElementById('q-result-cmd').textContent = r.cmd;
+  const link = document.getElementById('q-result-link');
+  link.href = WORKSHOPS[r.role].link;
+  const goto = document.getElementById('q-result-goto');
+  goto.textContent = r.gotoLabel;
+  goto.onclick = () => tab(r.goto);
+  document.getElementById('q-result').classList.remove('hidden');
+  document.getElementById('q-result').scrollIntoView({ behavior: 'smooth' });
+}
+
+function resetAssistant() {
+  document.getElementById('q-follow').classList.add('hidden');
+  document.getElementById('q-result').classList.add('hidden');
+  document.getElementById('q-role').scrollIntoView({ behavior: 'smooth' });
+}
+
+tab('start');
+loadProbe();
 loadEnvs();
 loadClusterInfo();
 setInterval(async () => {
