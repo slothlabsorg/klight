@@ -124,6 +124,20 @@
         }
       ]
     },
+    "secrets": {
+      "type": "array",
+      "title": "Per-service secret keys",
+      "description": "Names of sensitive environment variables for this service. klight materializes them into a per-service Kubernetes Secret named '<name>-secrets' and mounts it via an optional secretRef (so the service still starts in mock mode before secrets are set). Set values with 'klight secrets set <service> KEY=VALUE --env <env>'. Never put the secret VALUES here — only the key names.",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "examples": [
+        ["AUTH0_CLIENT_SECRET"],
+        ["SENDGRID_API_KEY", "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"],
+        ["AMAZON_REFRESH_TOKEN", "AMAZON_LWA_CLIENT_SECRET"]
+      ]
+    },
     "migration": {
       "type": "object",
       "title": "Database migration",
