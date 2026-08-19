@@ -35,7 +35,13 @@ def _current_image(service: str, namespace: str) -> str | None:
 
 
 def _set_image(service: str, namespace: str, image: str) -> bool:
-    """Update deployment image and wait for rollout."""
+    """Update deployment image and wait for rollout.
+
+    Local builds keep reusing the same "{service}:local" tag, so `kubectl set
+    image` sees no diff and skips the rollout even though the underlying image
+    content changed. Always force a rollout restart so pods actually pick up
+    the freshly loaded image.
+    """
     result = k.run([
         "set", "image", f"deployment/{service}",
         f"{service}={image}", "-n", namespace,
@@ -43,6 +49,7 @@ def _set_image(service: str, namespace: str, image: str) -> bool:
     if result.returncode != 0:
         console.print(f"[red]Failed to set image:[/red] {result.stderr.strip()}")
         return False
+    k.run(["rollout", "restart", f"deployment/{service}", "-n", namespace])
     k.run(["rollout", "status", f"deployment/{service}", "-n", namespace,
            "--timeout=120s"], capture=False)
     return True
@@ -84,6 +91,14 @@ def _is_local_target() -> bool:
 
 
 def _load_to_minikube(image: str, profile: str = "klight-demo") -> bool:
+    # Same fix as local.py's build_load: minikube image load silently keeps
+    # serving a stale cached image for a tag it already has, even when the
+    # underlying content changed. Remove first so replace always actually
+    # updates what's on the node.
+    subprocess.run(
+        ["minikube", "image", "rm", image, f"--profile={profile}"],
+        capture_output=True, text=True,
+    )
     result = subprocess.run(
         ["minikube", "image", "load", image, f"--profile={profile}"],
         capture_output=True, text=True,

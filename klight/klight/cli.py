@@ -10,6 +10,10 @@ from klight.commands import replace as replace_cmd
 from klight.commands import setup as setup_cmd
 from klight.commands import target as target_cmd
 from klight.commands import preflight
+from klight.commands import gateway as gateway_cmd
+from klight.commands import companion as companion_cmd
+from klight.commands import aws_refresh
+from klight.commands import mode as mode_cmd
 
 app = typer.Typer(
     name="klight",
@@ -26,6 +30,10 @@ app.add_typer(vault.app, name="vault")
 app.add_typer(local.app, name="local")
 app.add_typer(target_cmd.app, name="cluster")
 app.add_typer(secrets_cmd.app, name="secrets")
+app.add_typer(gateway_cmd.app, name="gateway")
+app.add_typer(companion_cmd.app, name="companion")
+app.add_typer(aws_refresh.app, name="aws-refresh")
+app.add_typer(mode_cmd.app, name="mode")
 
 
 # --- Top-level dev-friendly commands (kcs-inspired UX) ---

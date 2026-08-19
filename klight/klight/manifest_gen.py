@@ -5,6 +5,8 @@ This is how klight works without requiring a separate infra repo.
 """
 
 from __future__ import annotations
+import hashlib
+import json
 from typing import Any
 from klight.schema import KlightConfig
 
@@ -35,13 +37,20 @@ def _env_from(cfg: KlightConfig) -> list[dict]:
     return sources
 
 
-def _probe(cfg: KlightConfig, initial: int, period: int) -> dict:
+def _probe(cfg: KlightConfig, initial: int, period: int, failure_threshold: int = 3) -> dict:
     """HTTP probe when a health path is set; TCP probe otherwise (e.g. gRPC)."""
     if cfg.health:
         action = {"httpGet": {"path": cfg.health, "port": cfg.port}}
     else:
         action = {"tcpSocket": {"port": cfg.port}}
-    return {**action, "initialDelaySeconds": initial, "periodSeconds": period}
+    return {**action, "initialDelaySeconds": initial, "periodSeconds": period, "failureThreshold": failure_threshold}
+
+
+def _config_hash(cfg: KlightConfig) -> str:
+    """Hash of env/secrets declarations so pod template changes when config
+    changes, forcing a rollout (ConfigMap/Secret edits alone don't restart pods)."""
+    payload = json.dumps({"env": cfg.env, "secrets": getattr(cfg, "secrets", None)}, sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def deployment(cfg: KlightConfig) -> dict[str, Any]:
@@ -54,7 +63,10 @@ def deployment(cfg: KlightConfig) -> dict[str, Any]:
             "replicas": 1,
             "selector": {"matchLabels": {"app": cfg.name}},
             "template": {
-                "metadata": {"labels": {"app": cfg.name, "klight.service": cfg.name}},
+                "metadata": {
+                    "labels": {"app": cfg.name, "klight.service": cfg.name},
+                    "annotations": {"klight.io/config-hash": _config_hash(cfg)},
+                },
                 "spec": {
                     "initContainers": [
                         {
@@ -75,11 +87,16 @@ def deployment(cfg: KlightConfig) -> dict[str, Any]:
                             "ports": [{"containerPort": cfg.port}],
                             "envFrom": _env_from(cfg),
                             "resources": {
-                                "requests": {"cpu": "100m", "memory": "128Mi"},
-                                "limits": {"memory": "256Mi"},
+                                "requests": {"cpu": "250m", "memory": "768Mi"},
+                                "limits": {"memory": "1536Mi"},
                             },
-                            "readinessProbe": _probe(cfg, initial=10, period=5),
-                            "livenessProbe": _probe(cfg, initial=20, period=10),
+                            # JVM services (Spring Boot etc.) can take minutes to start,
+                            # especially when they retry/timeout against unreachable external
+                            # deps. startupProbe owns that grace period (up to 10 min here);
+                            # readiness/liveness only kick in once startup succeeds once.
+                            "startupProbe": _probe(cfg, initial=10, period=10, failure_threshold=60),
+                            "readinessProbe": _probe(cfg, initial=0, period=10, failure_threshold=3),
+                            "livenessProbe": _probe(cfg, initial=0, period=15, failure_threshold=6),
                         }
                     ],
                 },

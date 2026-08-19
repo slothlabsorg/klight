@@ -10,16 +10,186 @@ Tabs:
 """
 
 from __future__ import annotations
-import json, subprocess, os, urllib.request, base64, time, yaml
+import json, subprocess, os, urllib.request, base64, time, yaml, socket
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+# `klight ui` may be launched from a shell that never sourced the user's
+# profile (no login-shell rc files), so tools installed via Homebrew
+# (minikube, kubectl...) can end up missing from PATH even though `klight`
+# itself resolved fine. Make sure every subprocess this server spawns can
+# find them, regardless of how the server process itself was started.
+for _p in ("/opt/homebrew/bin", str(Path.home() / ".local" / "bin")):
+    if _p not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = _p + os.pathsep + os.environ.get("PATH", "")
+
 app = FastAPI(title="klight UI", docs_url=None, redoc_url=None)
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# ─── Local dev-loop process manager (non-k8s helpers: frontend dev servers,   ──
+# ─── plugin watch builds, proxies) — separate from the k8s services above.    ──
+# klight itself knows nothing about any specific project's services. The
+# actual catalog of local processes (and which k8s service each port-forward
+# belongs to, for the auto-bounce-after-rebuild below) lives in a JSON file
+# supplied by whoever's project this is - point KLIGHT_LOCAL_PROCESSES_FILE at
+# it. With no file configured, this feature is simply empty/inert.
+#
+# Expected JSON shape:
+# {
+#   "processes": {
+#     "<key>": {"label": str, "cmd": str, "cwd": str|null, "port": int|null, "needs_nvm": bool}
+#   },
+#   "service_port_forwards": {"<k8s-service-name>": "<process key>"}
+# }
+PROC_LOG_DIR = Path(os.environ.get("KLIGHT_UI_LOG_DIR", "/tmp/klight-ui-procs"))
+PROC_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_local_processes_config() -> dict:
+    path = os.environ.get("KLIGHT_LOCAL_PROCESSES_FILE")
+    if not path:
+        return {"processes": {}, "service_port_forwards": {}}
+    p = Path(path).expanduser()
+    if not p.exists():
+        return {"processes": {}, "service_port_forwards": {}}
+    try:
+        data = json.loads(p.read_text())
+        processes = data.get("processes", {})
+        for meta in processes.values():
+            if meta.get("cwd"):
+                meta["cwd"] = str(Path(meta["cwd"]).expanduser())
+        return {
+            "processes": processes,
+            "service_port_forwards": data.get("service_port_forwards", {}),
+        }
+    except Exception:
+        return {"processes": {}, "service_port_forwards": {}}
+
+
+_local_cfg = _load_local_processes_config()
+LOCAL_PROCESSES: dict[str, dict] = _local_cfg["processes"]
+# `kubectl port-forward` doesn't survive its target pod being replaced (rollout
+# restart kills the tunnel) - maps k8s service name -> the LOCAL_PROCESSES key
+# for its port-forward, so a rebuild can bounce it instead of leaving it stale.
+SERVICE_PORT_FORWARD: dict[str, str] = _local_cfg["service_port_forwards"]
+
+PROC_STATE: dict[str, subprocess.Popen] = {}
+
+
+def _build_shell_cmd(meta: dict) -> str:
+    if not meta.get("needs_nvm"):
+        return meta["cmd"]
+    return (
+        'export NVM_DIR="$HOME/.nvm"; '
+        '[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && . "/opt/homebrew/opt/nvm/nvm.sh"; '
+        'nvm use 24 >/dev/null 2>&1 || nvm use default >/dev/null 2>&1; '
+        f'exec {meta["cmd"]}'
+    )
+
+
+def _port_open(port: int, host: str = "localhost", timeout: float = 1.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _tail_log(key: str, lines: int = 5) -> str:
+    log_path = PROC_LOG_DIR / f"{key}.log"
+    if not log_path.exists():
+        return ""
+    try:
+        text = log_path.read_text(errors="ignore")
+        return "\n".join(text.splitlines()[-lines:])
+    except Exception:
+        return ""
+
+
+def _pids_on_port(port: int) -> list[int]:
+    r = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True)
+    return [int(p) for p in r.stdout.split()] if r.returncode == 0 else []
+
+
+def _is_running(key: str, meta: dict) -> bool:
+    """A process we spawned is definitely running if our handle says so. But it
+    may also have been started outside this klight-ui instance (e.g. by hand,
+    or a previous klight-ui process) - for anything with a port, the port
+    actually being open is the more reliable signal either way."""
+    proc = PROC_STATE.get(key)
+    if proc is not None and proc.poll() is None:
+        return True
+    if meta.get("port"):
+        return _port_open(meta["port"])
+    return False
+
+
+@app.get("/api/local/processes")
+def list_local_processes():
+    out = []
+    for key, meta in LOCAL_PROCESSES.items():
+        running = _is_running(key, meta)
+        out.append({
+            "key": key,
+            "label": meta["label"],
+            "running": running,
+            "port": meta.get("port"),
+            "port_ok": _port_open(meta["port"]) if (running and meta.get("port")) else None,
+            "log_tail": _tail_log(key),
+        })
+    return out
+
+
+@app.post("/api/local/processes/{key}/start")
+def start_local_process(key: str):
+    if key not in LOCAL_PROCESSES:
+        raise HTTPException(404, f"Unknown process '{key}'")
+    meta = LOCAL_PROCESSES[key]
+    if _is_running(key, meta):
+        return {"ok": True, "already_running": True}
+
+    if meta.get("cwd") and not Path(meta["cwd"]).exists():
+        raise HTTPException(400, f"Path not found: {meta['cwd']} (set KLIGHT_DEV_HOME or edit LOCAL_PROCESSES)")
+
+    log_path = PROC_LOG_DIR / f"{key}.log"
+    logf = open(log_path, "w")
+    proc = subprocess.Popen(
+        ["bash", "-lc", _build_shell_cmd(meta)],
+        cwd=meta.get("cwd"), stdout=logf, stderr=subprocess.STDOUT,
+    )
+    PROC_STATE[key] = proc
+    return {"ok": True, "pid": proc.pid}
+
+
+@app.post("/api/local/processes/{key}/stop")
+def stop_local_process(key: str):
+    if key not in LOCAL_PROCESSES:
+        raise HTTPException(404, f"Unknown process '{key}'")
+    meta = LOCAL_PROCESSES[key]
+
+    proc = PROC_STATE.get(key)
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        PROC_STATE.pop(key, None)
+
+    # Also clean up anything holding the port that we didn't spawn ourselves
+    # (e.g. started by hand before this klight-ui instance existed).
+    if meta.get("port"):
+        for pid in _pids_on_port(meta["port"]):
+            try:
+                os.kill(pid, 15)
+            except ProcessLookupError:
+                pass
+
+    return {"ok": True}
 
 BUILT_IN_CATALOG = {
     "postgres", "kafka", "redis", "mongodb",
@@ -102,6 +272,61 @@ def get_logs(env_name: str, svc: str, lines: int = 150):
         capture_output=True, text=True,
     )
     return {"logs": r.stdout or r.stderr, "service": svc}
+
+
+class RebuildRequest(BaseModel):
+    path: str    # absolute path to the service's repo (must contain klight.yaml)
+    profile: str = "klight-demo"
+
+
+@app.post("/api/envs/{env_name}/services/{svc}/rebuild")
+def rebuild_service(env_name: str, svc: str, req: RebuildRequest):
+    """
+    One-button dev loop: build (mvn/gradle/docker, whatever klight.yaml's
+    `build.command` says, or a plain `docker build` if none) → load into
+    minikube → restart the pod → BLOCK until the rollout actually reports
+    Ready (not just "restart triggered"), so the caller gets a true green/red
+    signal instead of having to poll logs by hand.
+    """
+    from klight.commands.watch import _build_image, _load_to_minikube
+    from klight.schema import KlightConfig
+
+    repo_path = Path(req.path).expanduser()
+    klf = repo_path / "klight.yaml"
+    if not klf.exists():
+        raise HTTPException(400, f"No klight.yaml at {repo_path}")
+
+    cfg = KlightConfig.from_file(klf)
+    ns = f"env-{env_name}"
+    t0 = time.time()
+
+    if not _build_image(cfg, repo_path):
+        raise HTTPException(500, "Build failed — check the service's own build output/logs")
+
+    if not _load_to_minikube(cfg.effective_image(), req.profile):
+        raise HTTPException(500, "minikube image load failed")
+
+    subprocess.run(["kubectl", "-n", ns, "rollout", "restart", f"deployment/{svc}"],
+                   capture_output=True, text=True)
+
+    r = subprocess.run(
+        ["kubectl", "-n", ns, "rollout", "status", f"deployment/{svc}", "--timeout=600s"],
+        capture_output=True, text=True,
+    )
+    elapsed = round(time.time() - t0)
+    if r.returncode != 0:
+        raise HTTPException(500, f"Rollout did not go Ready within timeout ({elapsed}s elapsed): {(r.stdout or r.stderr)[-1000:]}")
+
+    # A rollout restart replaces the pod, which kills any `kubectl port-forward`
+    # tunnel pointed at it - bounce the matching one so :8080/:8082 keep working
+    # without the user having to notice and do it by hand.
+    pf_key = SERVICE_PORT_FORWARD.get(svc)
+    if pf_key:
+        stop_local_process(pf_key)
+        time.sleep(1)
+        start_local_process(pf_key)
+
+    return {"ok": True, "service": svc, "elapsed_seconds": elapsed}
 
 
 @app.delete("/api/envs/{env_name}")
@@ -551,6 +776,108 @@ def onboarding_probe():
     return result
 
 
+# ─── Mode API (REMOTE / LOCAL toggle) ─────────────────────────────────────────
+
+MODE_FILE = Path.home() / ".devnext-mode"
+
+
+@app.get("/api/mode")
+def get_mode():
+    """Return current backend mode."""
+    try:
+        mode = MODE_FILE.read_text().strip().lower() if MODE_FILE.exists() else "remote"
+    except Exception:
+        mode = "remote"
+    return {"mode": mode}
+
+
+class SetModeRequest(BaseModel):
+    mode: str  # "local" or "remote"
+
+
+@app.post("/api/mode")
+def set_mode(req: SetModeRequest):
+    """Switch backend mode."""
+    if req.mode not in ("local", "remote"):
+        raise HTTPException(400, "mode must be 'local' or 'remote'")
+    MODE_FILE.write_text(req.mode + "\n")
+    return {"ok": True, "mode": req.mode}
+
+
+# ─── Gateway status API ───────────────────────────────────────────────────────
+
+@app.get("/api/gateway/status")
+def gateway_status():
+    """Check if gateway proxy is running and show config."""
+    pid_file = Path.home() / ".klight" / "gateway.pid"
+    running = False
+    pid = None
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)  # check if process exists
+            running = True
+        except (ValueError, ProcessLookupError, OSError):
+            running = False
+
+    # Read token status
+    token_file = Path.home() / ".devnext-token"
+    has_token = False
+    try:
+        has_token = token_file.exists() and len(token_file.read_text().strip()) > 10
+    except Exception:
+        pass
+
+    return {
+        "running": running,
+        "pid": pid if running else None,
+        "port": 4300,
+        "has_token": has_token,
+        "token_hint": "echo '<token>' > ~/.devnext-token" if not has_token else None,
+    }
+
+
+# ─── Companions YAML API (reads klight-companions.yaml) ──────────────────────
+
+def _load_companions_yaml() -> dict:
+    """Load companions from klight-companions.yaml (new format)."""
+    search_paths = [
+        Path.cwd() / "klight-companions.yaml",
+        Path.home() / ".klight" / "klight-companions.yaml",
+    ]
+    for p in search_paths:
+        if p.exists():
+            try:
+                data = yaml.safe_load(p.read_text())
+                return data.get("companions", {}) if data else {}
+            except Exception:
+                pass
+    return {}
+
+
+@app.get("/api/companions")
+def list_companions():
+    """Return companion processes from klight-companions.yaml with live status."""
+    companions = _load_companions_yaml()
+    if not companions:
+        # Fallback to old LOCAL_PROCESSES
+        return list_local_processes()
+
+    out = []
+    for key, meta in companions.items():
+        port = meta.get("port")
+        running = _port_open(port) if port else False
+        out.append({
+            "key": key,
+            "label": meta.get("label", key),
+            "running": running,
+            "port": port,
+            "node": meta.get("node"),
+            "cwd": meta.get("cwd", ""),
+        })
+    return out
+
+
 # ─── HTML Frontend ────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -572,6 +899,12 @@ HTML = """<!DOCTYPE html>
   pre { white-space:pre-wrap; word-break:break-all; font-size:12px; }
   input,select,textarea { background:#0d1b3e; border:1px solid #1a3060; border-radius:6px; padding:6px 10px; color:#e2e8f0; width:100%; }
   input:focus,select:focus,textarea:focus { outline:none; border-color:#B4FF3C; }
+  #logs-panel { resize: vertical; overflow: hidden; min-height: 160px; max-height: 85vh; }
+  #logs-content {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px; line-height: 1.5;
+    white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere;
+  }
 </style>
 </head>
 <body class="min-h-screen">
@@ -649,28 +982,28 @@ HTML = """<!DOCTYPE html>
 <div id="tab-start" class="hidden flex-1 overflow-y-auto p-6">
   <div class="max-w-2xl">
     <h2 class="text-xl font-bold mb-1">Get started</h2>
-    <p class="text-slate-400 text-sm mb-4">Te hacemos un par de preguntas y te llevamos al flujo y los comandos correctos para tu rol. No necesitas saber Kubernetes.</p>
+    <p class="text-slate-400 text-sm mb-4">We'll ask a couple of questions and point you to the right flow and commands for your role. No Kubernetes knowledge needed.</p>
 
     <!-- Auto-detected capabilities -->
     <div id="probe-banner" class="rounded-lg p-3 mb-5 text-xs" style="background:#0d1b3e;border:1px solid #1a3060">
-      <span class="text-slate-400">Detectando tu entorno…</span>
+      <span class="text-slate-400">Detecting your environment…</span>
     </div>
 
     <!-- Q0: role -->
     <div id="q-role" class="rounded-lg p-5 mb-4" style="background:#0d1b3e">
-      <h3 class="font-semibold mb-3" style="color:#B4FF3C">¿Qué eres?</h3>
+      <h3 class="font-semibold mb-3" style="color:#B4FF3C">What are you?</h3>
       <div class="grid grid-cols-1 gap-2">
         <button onclick="pickRole('dev')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
-          <span class="font-medium text-white">Desarrollador</span>
-          <span class="block text-xs text-slate-400">Escribo código de uno o más servicios</span>
+          <span class="font-medium text-white">Developer</span>
+          <span class="block text-xs text-slate-400">I write code for one or more services</span>
         </button>
         <button onclick="pickRole('devops')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
-          <span class="font-medium text-white">DevOps / Plataforma</span>
-          <span class="block text-xs text-slate-400">Monto la infra y el archivo central del equipo</span>
+          <span class="font-medium text-white">DevOps / Platform</span>
+          <span class="block text-xs text-slate-400">I set up the infra and the team's central file</span>
         </button>
         <button onclick="pickRole('techlead')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
-          <span class="font-medium text-white">Tech lead / Arquitecto</span>
-          <span class="block text-xs text-slate-400">Decido arquitectura, varios lenguajes (gRPC, GraphQL)</span>
+          <span class="font-medium text-white">Tech lead / Architect</span>
+          <span class="block text-xs text-slate-400">I decide architecture, multiple languages (gRPC, GraphQL)</span>
         </button>
       </div>
     </div>
@@ -685,12 +1018,12 @@ HTML = """<!DOCTYPE html>
     <div id="q-result" class="hidden rounded-lg p-5 mb-4" style="background:#050d1f;border:1px solid #B4FF3C">
       <h3 id="q-result-title" class="font-semibold mb-2" style="color:#B4FF3C"></h3>
       <p id="q-result-desc" class="text-sm text-slate-300 mb-3"></p>
-      <div class="text-xs text-slate-400 mb-1">Corre estos comandos:</div>
+      <div class="text-xs text-slate-400 mb-1">Run these commands:</div>
       <pre id="q-result-cmd" class="text-green-400 rounded p-3 mb-3" style="background:#020810"></pre>
       <div class="flex gap-2 flex-wrap">
-        <a id="q-result-link" href="#" target="_blank" class="px-3 py-2 rounded text-sm font-semibold no-underline" style="background:#B4FF3C;color:#050d1f">Abrir WORKSHOP.md</a>
+        <a id="q-result-link" href="#" target="_blank" class="px-3 py-2 rounded text-sm font-semibold no-underline" style="background:#B4FF3C;color:#050d1f">Open WORKSHOP.md</a>
         <button id="q-result-goto" onclick="" class="px-3 py-2 rounded text-sm text-slate-200" style="border:1px solid #1a3060"></button>
-        <button onclick="resetAssistant()" class="px-3 py-2 rounded text-sm text-slate-400" style="border:1px solid #1a3060">↺ Empezar de nuevo</button>
+        <button onclick="resetAssistant()" class="px-3 py-2 rounded text-sm text-slate-400" style="border:1px solid #1a3060">↺ Start over</button>
       </div>
     </div>
   </div>
@@ -699,14 +1032,16 @@ HTML = """<!DOCTYPE html>
 <!-- ENVIRONMENTS TAB -->
 <div id="tab-envs" class="hidden flex-1 flex flex-col overflow-hidden">
   <div class="flex-1 overflow-y-auto p-5" id="services-panel">
-    <div class="flex flex-col items-center justify-center h-full text-center py-12">
-      <img src="/static/images/klight-sloth4.png" class="w-48 mb-6 opacity-80" alt="klight sloth">
+    <div class="flex flex-col items-center justify-center text-center py-8">
+      <img src="/static/images/klight-sloth4.png" class="w-32 mb-4 opacity-80" alt="klight sloth">
       <p class="text-slate-400 text-sm">Select an environment from the sidebar →</p>
     </div>
+    <div id="local-processes-panel" class="mt-2"></div>
   </div>
-  <div id="logs-panel" class="hidden h-60 flex flex-col" style="border-top:1px solid #1a3060;background:#020810">
+  <div id="logs-panel" class="hidden flex flex-col" style="height:320px;border-top:1px solid #1a3060;background:#020810">
     <div class="flex items-center px-4 py-2" style="border-bottom:1px solid #1a3060">
       <span class="text-xs text-slate-400" id="logs-title">Logs</span>
+      <span class="ml-3 text-xs text-slate-600">↕ drag the bottom edge to resize</span>
       <button onclick="document.getElementById('logs-panel').classList.add('hidden')" class="ml-auto text-slate-500 hover:text-white text-xs">✕</button>
     </div>
     <pre class="flex-1 overflow-y-auto p-3 text-green-400" id="logs-content"></pre>
@@ -869,15 +1204,19 @@ async function loadServices(name) {
   const healthy = svcs.filter(s=>s.healthy).length;
   const cards = svcs.map(s => {
     const dot = s.healthy ? 'dot-g' : (s.status.includes('Loop') ? 'dot-r' : 'dot-y');
-    return `<div onclick="showLogs('${name}','${s.name}')"
-      class="rounded-lg p-4 cursor-pointer" style="background:#0d1b3e;border:1px solid #1a3060" onmouseover="this.style.borderColor='#B4FF3C'" onmouseout="this.style.borderColor='#1a3060'">
-      <div class="flex items-center gap-2 mb-1">
+    return `<div
+      class="rounded-lg p-4" style="background:#0d1b3e;border:1px solid #1a3060" onmouseover="this.style.borderColor='#B4FF3C'" onmouseout="this.style.borderColor='#1a3060'">
+      <div class="flex items-center gap-2 mb-1 cursor-pointer" onclick="showLogs('${name}','${s.name}')">
         <span class="${dot}"></span>
         <span class="font-medium text-white">${s.name}</span>
         ${s.restarts>0 ? `<span class="text-xs bg-yellow-900 text-yellow-300 px-2 rounded">${s.restarts}×</span>` : ''}
         <span class="ml-auto text-xs text-slate-400">${s.ready}/${s.total}</span>
       </div>
-      <div class="text-xs text-slate-400">${s.status}</div>
+      <div class="text-xs text-slate-400 cursor-pointer mb-2" onclick="showLogs('${name}','${s.name}')">${s.status}</div>
+      <div class="flex items-center gap-2">
+        <button onclick="rebuildService('${name}','${s.name}')" id="rebuild-btn-${s.name}" class="text-xs rounded px-2 py-1" style="border:1px solid #B4FF3C;color:#B4FF3C">🔨 Rebuild</button>
+        <span id="rebuild-status-${s.name}" class="text-xs text-slate-400"></span>
+      </div>
     </div>`;
   }).join('');
   panel.innerHTML = `
@@ -887,7 +1226,78 @@ async function loadServices(name) {
       <button onclick="destroyEnv('${name}')" class="ml-auto text-xs text-red-400 border border-red-800 rounded px-2 py-1 hover:bg-red-900">Destroy</button>
     </div>
     <div class="grid grid-cols-2 lg:grid-cols-3 gap-3">${cards}</div>
-    <p class="mt-3 text-xs text-slate-500">Click a service → view logs</p>`;
+    <p class="mt-3 text-xs text-slate-500">Click a service card → view logs. 🔨 Rebuild = your build command → load into minikube → restart → wait for Ready.</p>
+    <div id="local-processes-panel" class="mt-6"></div>`;
+  loadLocalProcesses();
+}
+
+// ── Rebuild a k8s service from a local repo path (one-button dev loop) ───────
+function getServicePath(svc) {
+  const paths = JSON.parse(localStorage.getItem('klight_service_paths') || '{}');
+  if (paths[svc]) return paths[svc];
+  const p = prompt(`Local repo path for '${svc}' (must contain klight.yaml):`, `~/dev/${svc}`);
+  if (!p) return null;
+  paths[svc] = p;
+  localStorage.setItem('klight_service_paths', JSON.stringify(paths));
+  return p;
+}
+
+async function rebuildService(env, svc) {
+  const path = getServicePath(svc);
+  if (!path) return;
+  const btn = document.getElementById(`rebuild-btn-${svc}`);
+  const status = document.getElementById(`rebuild-status-${svc}`);
+  btn.disabled = true;
+  status.className = 'text-xs text-yellow-300';
+  status.textContent = 'Building & redeploying… (can take a few min for JVM services)';
+  try {
+    const res = await fetch(`/api/envs/${env}/services/${svc}/rebuild`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path}),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (res.ok && d.ok) {
+      status.className = 'text-xs text-green-400';
+      status.textContent = `✓ Green again (${d.elapsed_seconds}s)`;
+      loadServices(env);
+    } else {
+      status.className = 'text-xs text-red-400';
+      status.textContent = '✗ ' + (d.detail || 'failed');
+    }
+  } catch (e) {
+    status.className = 'text-xs text-red-400';
+    status.textContent = '✗ ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Local dev processes (non-k8s: frontend dev servers, plugin watch, proxies) ─
+async function loadLocalProcesses() {
+  const panel = document.getElementById('local-processes-panel');
+  if (!panel) return;
+  const procs = await fetch('/api/local/processes').then(r => r.json()).catch(() => []);
+  panel.innerHTML = `
+    <h3 class="text-sm font-semibold text-slate-300 mb-2">Local dev processes (frontend/proxies — not k8s pods)</h3>
+    <div class="space-y-2">${procs.map(p => `
+      <div class="rounded-lg p-3 flex items-center gap-3" style="background:#0d1b3e;border:1px solid #1a3060">
+        <span class="${p.running ? (p.port && !p.port_ok ? 'dot-y' : 'dot-g') : 'dot-r'}"></span>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm text-white">${p.label}</div>
+          ${p.log_tail ? `<div class="text-xs text-slate-500 truncate">${p.log_tail.split('\\n').pop()}</div>` : ''}
+        </div>
+        <button onclick="toggleLocalProcess('${p.key}', ${p.running})" class="text-xs rounded px-3 py-1 font-semibold"
+          style="${p.running ? 'border:1px solid #ef4444;color:#ef4444' : 'background:#B4FF3C;color:#050d1f'}">
+          ${p.running ? 'Stop' : 'Start'}
+        </button>
+      </div>`).join('')}
+    </div>`;
+}
+
+async function toggleLocalProcess(key, isRunning) {
+  await fetch(`/api/local/processes/${key}/${isRunning ? 'stop' : 'start'}`, {method: 'POST'});
+  setTimeout(loadLocalProcesses, 800);
 }
 
 async function showLogs(env, svc) {
@@ -1198,14 +1608,14 @@ async function loadProbe() {
   try {
     probeData = await fetch('/api/onboarding/probe').then(r=>r.json());
   } catch { probeData = null; }
-  if (!probeData) { b.innerHTML = '<span class="text-slate-400">No se pudo detectar el entorno (sigue igual abajo).</span>'; return; }
+  if (!probeData) { b.innerHTML = '<span class="text-slate-400">Could not detect the environment (still works the same below).</span>'; return; }
   const chip = (ok, label) => `<span class="px-2 py-0.5 rounded mr-1" style="background:${ok?'#0f2a14':'#2a0f0f'};color:${ok?'#86efac':'#fca5a5'}">${ok?'✓':'✗'} ${label}</span>`;
   let extra = '';
-  if (probeData.has_team_yaml) extra += ` <span class="text-slate-400">· team '${probeData.team_name}' (${(probeData.profiles||[]).join(', ')||'sin profiles'})</span>`;
+  if (probeData.has_team_yaml) extra += ` <span class="text-slate-400">· team '${probeData.team_name}' (${(probeData.profiles||[]).join(', ')||'no profiles'})</span>`;
   if (probeData.active_target) extra += ` <span class="text-slate-400">· target: ${probeData.active_target}</span>`;
-  b.innerHTML = '<span class="text-slate-400 mr-2">Detectado:</span>' +
-    chip(probeData.kubectl_access, 'acceso kubectl') +
-    chip(probeData.local_cluster, 'minikube local') +
+  b.innerHTML = '<span class="text-slate-400 mr-2">Detected:</span>' +
+    chip(probeData.kubectl_access, 'kubectl access') +
+    chip(probeData.local_cluster, 'local minikube') +
     chip(probeData.has_team_yaml, 'klight-team.yaml') + extra;
 }
 
@@ -1216,22 +1626,22 @@ function pickRole(role) {
   document.getElementById('q-result').classList.add('hidden');
 
   if (role === 'dev') {
-    title.textContent = '¿Tienes los repos clonados localmente?';
+    title.textContent = 'Do you have the repos cloned locally?';
     opts.innerHTML = `
       <button onclick="result('dev','local')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
-        <span class="font-medium text-white">Sí, tengo los repos</span>
+        <span class="font-medium text-white">Yes, I have the repos</span>
         <span class="block text-xs text-slate-400">World 1 — klight from-repos</span></button>
       <button onclick="result('dev','sync')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
-        <span class="font-medium text-white">No, tengo una URL de klight-team.yaml</span>
-        <span class="block text-xs text-slate-400">klight sync + klight up (sin clonar)</span></button>`;
+        <span class="font-medium text-white">No, I have a klight-team.yaml URL</span>
+        <span class="block text-xs text-slate-400">klight sync + klight up (no cloning)</span></button>`;
   } else if (role === 'devops') {
-    title.textContent = '¿Tienes acceso a un cluster?';
+    title.textContent = 'Do you have access to a cluster?';
     opts.innerHTML = `
       <button onclick="result('devops','local')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
-        <span class="font-medium text-white">Solo minikube local</span>
-        <span class="block text-xs text-slate-400">Setup Wizard + demo company-infra</span></button>
+        <span class="font-medium text-white">Local minikube only</span>
+        <span class="block text-xs text-slate-400">Setup Wizard + company-infra demo</span></button>
       <button onclick="result('devops','remote')" class="ob-opt text-left rounded px-4 py-3" style="border:1px solid #1a3060">
-        <span class="font-medium text-white">Cluster remoto (EKS/GKE)</span>
+        <span class="font-medium text-white">Remote cluster (EKS/GKE)</span>
         <span class="block text-xs text-slate-400">klight connect + klight use remote</span></button>`;
   } else {
     // techlead: no follow-up needed
@@ -1244,34 +1654,34 @@ function pickRole(role) {
 
 const RESULTS = {
   'dev|local': {
-    title: 'Ruta World 1 — desarrollo local',
-    desc: 'Clones locales: klight construye y despliega tus servicios en orden de dependencias.',
+    title: 'World 1 route — local development',
+    desc: 'Local clones: klight builds and deploys your services in dependency order.',
     cmd: `klight local setup\nklight from-repos ./services/* --env dev\nklight open students-web --env dev`,
-    role: 'dev', goto: 'envs', gotoLabel: 'Ver Environments',
+    role: 'dev', goto: 'envs', gotoLabel: 'View Environments',
   },
   'dev|sync': {
-    title: 'Ruta sync — sin clonar servicios',
-    desc: 'Apunta al archivo central del equipo y levanta un profile completo.',
+    title: 'Sync route — no service cloning needed',
+    desc: "Point at the team's central file and bring up a whole profile.",
     cmd: `klight sync https://raw.githubusercontent.com/<org>/company-infra/main/klight-team.yaml\nklight use local\nklight up <profile> --env dev`,
-    role: 'dev', goto: 'envs', gotoLabel: 'Ver Environments',
+    role: 'dev', goto: 'envs', gotoLabel: 'View Environments',
   },
   'devops|local': {
-    title: 'Ruta DevOps local — crear el archivo central',
-    desc: 'Usa el Setup Wizard para escanear tus repos y generar klight-team.yaml, luego pruébalo con el demo company-infra.',
-    cmd: `klight local setup\n# Genera klight-team.yaml con el Setup Wizard (pestaña de arriba)\nklight up todo --env alice`,
-    role: 'devops', goto: 'setup', gotoLabel: 'Abrir Setup Wizard',
+    title: 'Local DevOps route — create the central file',
+    desc: 'Use the Setup Wizard to scan your repos and generate klight-team.yaml, then try it out with the company-infra demo.',
+    cmd: `klight local setup\n# Generate klight-team.yaml with the Setup Wizard (tab above)\nklight up todo --env alice`,
+    role: 'devops', goto: 'setup', gotoLabel: 'Open Setup Wizard',
   },
   'devops|remote': {
-    title: 'Ruta DevOps remoto — cluster compartido',
-    desc: 'Conecta el cluster remoto y cambia de target. Los devs harán klight up contra el cluster.',
+    title: 'Remote DevOps route — shared cluster',
+    desc: 'Connect the remote cluster and switch target. Devs will run klight up against the cluster.',
     cmd: `klight connect --kubeconfig ~/company-dev.yaml\nklight use remote\nklight up todo --env alice`,
-    role: 'devops', goto: 'setup', gotoLabel: 'Abrir Setup Wizard',
+    role: 'devops', goto: 'setup', gotoLabel: 'Open Setup Wizard',
   },
   'techlead|polyglot': {
-    title: 'Ruta polyglot — gRPC + GraphQL',
-    desc: 'Servicios en distintos lenguajes (Rust gRPC), un BFF GraphQL y build custom. klight orquesta sin tocar tu código.',
+    title: 'Polyglot route — gRPC + GraphQL',
+    desc: 'Services in different languages (Rust gRPC), a GraphQL BFF, and a custom build. klight orchestrates without touching your code.',
     cmd: `klight local setup\nklight local resize --memory 8192 --cpus 4\nklight from-repos ./services/* --env tl\nklight open dropship-web --env tl`,
-    role: 'techlead', goto: 'envs', gotoLabel: 'Ver Environments',
+    role: 'techlead', goto: 'envs', gotoLabel: 'View Environments',
   },
 };
 
@@ -1300,9 +1710,11 @@ tab('start');
 loadProbe();
 loadEnvs();
 loadClusterInfo();
+loadLocalProcesses();
 setInterval(async () => {
   await loadEnvs();
   if (currentEnv) loadServices(currentEnv);
+  else loadLocalProcesses();
 }, 5000);
 setInterval(loadClusterInfo, 15000);
 </script>

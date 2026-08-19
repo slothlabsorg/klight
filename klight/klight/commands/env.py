@@ -38,13 +38,25 @@ def create(
 
     secrets_path = manifests / "env" / "secrets"
     secrets_env = secrets_path / "global.env"
+    secrets_example = secrets_path / "global.env.example"
+    if not secrets_env.exists() and secrets_example.exists():
+        # kustomize's secretGenerator hard-references global.env and fails the
+        # whole `apply -k` if it's missing - which then leaves klight-global-secrets
+        # never created, which then breaks any catalog infra (e.g. redis) that
+        # unconditionally references it via secretKeyRef. Fall back to the
+        # example file's dev-safe placeholders so `env create` works out of the
+        # box; the user can still copy+edit global.env for real values later.
+        secrets_env.write_text(secrets_example.read_text())
+        console.print(
+            "[yellow]![/yellow] No secrets/global.env found — using global.env.example "
+            "placeholder values. Edit manifests/env/secrets/global.env for real values."
+        )
     if secrets_env.exists():
         k.apply_kustomize(secrets_path, ns)
         console.print("[green]✓[/green] Global secrets")
     else:
         console.print(
-            "[yellow]![/yellow] No secrets/global.env found — skipping. "
-            "Copy manifests/env/secrets/global.env.example to global.env and fill in values."
+            "[yellow]![/yellow] No secrets/global.env or global.env.example found — skipping."
         )
 
     if with_infra:

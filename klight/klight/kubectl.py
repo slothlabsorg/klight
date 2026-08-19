@@ -56,3 +56,16 @@ def get_manifests_dir() -> Path:
     raise RuntimeError(
         "Cannot find manifests/ directory. Set KLIGHT_MANIFESTS_DIR env var."
     )
+
+
+def get_sentinel_dir() -> Path | None:
+    """Locate the sentinel/ source dir (sibling of manifests/), if present."""
+    env_override = os.environ.get("KLIGHT_SENTINEL_DIR")
+    if env_override:
+        return Path(env_override)
+    here = Path(__file__).parent
+    for parent in [here, here.parent, here.parent.parent, here.parent.parent.parent]:
+        candidate = parent / "sentinel"
+        if candidate.is_dir():
+            return candidate
+    return None

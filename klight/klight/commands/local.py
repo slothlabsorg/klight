@@ -93,6 +93,29 @@ def setup(
     console.print("  Enabling ingress addon...")
     _minikube(["addons", "enable", "ingress", f"--profile={profile}"])
 
+    # Build + load the sentinel init-container image. Every service deployment
+    # gets a sentinel init container (see manifest_gen.py), so without this
+    # every first deploy fails with ErrImageNeverPull until someone notices
+    # and does this by hand.
+    sentinel_dir = k.get_sentinel_dir()
+    if sentinel_dir is not None:
+        console.print("  Building sentinel image...")
+        build = subprocess.run(
+            ["docker", "build", "-t", "klight-sentinel:latest", str(sentinel_dir)],
+            capture_output=True, text=True,
+        )
+        if build.returncode != 0:
+            console.print(f"[yellow]  Warning: sentinel image build failed:[/yellow] {build.stderr.strip()}")
+        else:
+            load = _minikube(["image", "rm", "klight-sentinel:latest", f"--profile={profile}"])
+            load = _minikube(["image", "load", "klight-sentinel:latest", f"--profile={profile}"])
+            if load.returncode == 0:
+                console.print("  [green]✓[/green] sentinel image ready")
+            else:
+                console.print("[yellow]  Warning: sentinel image load into minikube failed[/yellow]")
+    else:
+        console.print("[yellow]  Warning: could not find sentinel/ source dir - init containers will fail until you build+load klight-sentinel:latest manually[/yellow]")
+
     # Set kubectl context
     result = subprocess.run(
         ["kubectl", "config", "use-context", profile],
@@ -131,6 +154,11 @@ def build_load(
     if result.returncode != 0:
         console.print(f"[red]docker build failed[/red]")
         raise typer.Exit(1)
+
+    # minikube image load silently no-ops if this tag is already cached on the node,
+    # even when the underlying image content changed (same tag, new build). Remove
+    # first so a rebuild always actually replaces what's on the node.
+    _minikube(["image", "rm", image, f"--profile={profile}"])
 
     console.print(f"[bold]Loading[/bold] {image} into minikube ({profile})...")
     result = _minikube(["image", "load", image, f"--profile={profile}"])
